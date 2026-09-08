@@ -156,6 +156,13 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .full{grid-column:1/-1}
 .check{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:14px;cursor:pointer}
 .check input{width:22px;height:22px;accent-color:var(--teal);flex:0 0 22px}
+/* A number that may be negative: the ± button flips the sign, for keypads with no minus key */
+.signed{display:flex;gap:6px;align-items:stretch}
+.signed input{flex:1;min-width:0}
+.signed .sgn{flex:0 0 48px;border:1px solid var(--fld-brd);background:var(--card-2);border-radius:var(--r-sm);
+  font-size:19px;font-weight:800;color:var(--ink-2);cursor:pointer;min-height:var(--tap);padding:0;line-height:1}
+.signed .sgn.on{background:var(--bad-bg);border-color:var(--bad-bg);color:var(--bad)}
+.signed .sgn:active{transform:scale(.95)}
 
 /* Switch — used for the optional bill-shift settings */
 .switch{display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -929,6 +936,15 @@ const inp = (path, val, type = 'number', extra = '') => {
   const attrs = type === 'number' ? 'type="number" inputmode="decimal" step="any"' : `type="${type}"`;
   return `<input ${attrs} data-set="${esc(path)}" value="${esc(v)}" ${extra}>`;
 };
+/* A figure that can legitimately be negative — an overdraft, a month you dipped
+   into savings. inputmode="decimal" is deliberately left off: it means "fractional
+   numeric", and phone keypads for it carry no minus key. The ± button covers any
+   keyboard that still doesn't offer one. */
+const signedInp = (path, val, extra = '') => {
+  const neg = C.num(val) < 0, v = val === null || val === undefined ? '' : val;
+  return `<div class="signed"><input type="number" step="any" data-set="${esc(path)}" value="${esc(v)}" ${extra}>
+    <button type="button" class="sgn${neg ? ' on' : ''}" data-act="sign" aria-label="Make this ${neg ? 'positive' : 'negative'}">${neg ? '−' : '+'}</button></div>`;
+};
 const pctInp = (path, val) => `<input type="number" inputmode="decimal" step="any" data-set="${esc(path)}" data-kind="pct" value="${val == null ? '' : +(val * 100).toFixed(4)}">`;
 const sel = (path, val, opts) => `<select data-set="${esc(path)}">${opts.map(o => `<option${o === val ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
 const bar = (p, cls = '') => `<div class="bar ${cls}"><i style="width:${Math.max(0, Math.min(100, Math.round((p || 0) * 100)))}%"></i></div>`;
@@ -953,18 +969,19 @@ function sparkline(series) {
   const line = series.map((s, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(s.bal).toFixed(1)}`).join(' ');
   const area = `${line} L${X(series.length - 1).toFixed(1)} ${h - pad} L${pad} ${h - pad} Z`;
   const last = series[series.length - 1];
+  const hue = neg ? 'var(--coral)' : 'var(--teal)';
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
       aria-label="Projected balance from ${esc(C.fmtD(series[0].date))} to ${esc(C.fmtD(last.date))}">
     <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="var(--teal)" stop-opacity=".28"/>
-      <stop offset="100%" stop-color="var(--teal)" stop-opacity="0"/></linearGradient></defs>
+      <stop offset="0%" stop-color="${hue}" stop-opacity=".28"/>
+      <stop offset="100%" stop-color="${hue}" stop-opacity="0"/></linearGradient></defs>
     ${neg ? `<line x1="${pad}" y1="${Y(0).toFixed(1)}" x2="${w - pad}" y2="${Y(0).toFixed(1)}"
       stroke="var(--bad)" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" opacity=".7"/>` : ''}
     <path d="${area}" fill="url(#sg)"/>
-    <path d="${line}" fill="none" stroke="${neg ? 'var(--coral)' : 'var(--teal)'}" stroke-width="2"
+    <path d="${line}" fill="none" stroke="${hue}" stroke-width="2"
       stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
     <circle cx="${X(series.length - 1).toFixed(1)}" cy="${Y(last.bal).toFixed(1)}" r="3.2"
-      fill="var(--card)" stroke="${neg ? 'var(--coral)' : 'var(--teal)'}" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      fill="var(--card)" stroke="${hue}" stroke-width="2" vector-effect="non-scaling-stroke"/>
   </svg>`;
 }
 
@@ -999,8 +1016,9 @@ const VIEWS = {
 
     h += `<div class="tiles">
       ${fl.hasBal
-        ? tile('teal', 'Safe to spend', C.gbp(fl.safe, 0),
-            fl.perDay != null && fl.days > 0 ? C.gbp(fl.perDay, 0) + ' a day for ' + fl.days + ' days' : 'pay day is today')
+        ? tile(fl.safe < 0 ? 'coral' : 'teal', 'Safe to spend', C.gbp(fl.safe, 0),
+            fl.safe > 0 && fl.perDay != null && fl.days > 0 ? C.gbp(fl.perDay, 0) + ' a day for ' + fl.days + ' days'
+              : fl.safe < 0 ? 'short before ' + esc(C.fmtDM(fl.to)) : 'pay day is today')
         : tile('teal', 'Disposable next period', per ? C.gbp(per.disposable, 0) : '–',
             per ? C.gbp(per.net, 0) + ' pay less ' + C.gbp(per.outgoings, 0) + ' bills' : 'add your pay details')}
       ${tile('navy', 'Next pay day', nx ? C.gbp(nx.net, 0) : '–', nx ? esc(C.fmtD(nx.payday)) : '')}
@@ -1095,7 +1113,7 @@ const VIEWS = {
     if (fl.hasBal) {
       h += `<div class="flowhero"><div><div class="amt ${fl.safe < 0 ? 'neg' : ''}">${C.gbp(fl.safe)}</div>
           <div class="muted small">free to spend, keeping your ${C.gbp(fl.buffer, 0)} buffer</div></div>
-        ${fl.perDay != null ? `<div class="per"><b>${C.gbp(fl.perDay)}</b>a day</div>` : ''}</div>
+        ${fl.perDay != null && fl.safe > 0 ? `<div class="per"><b>${C.gbp(fl.perDay)}</b>a day</div>` : ''}</div>
         <div class="sparkwrap">${sparkline(fl.series)}</div>
         <div class="results">
           <div class="r"><span>Balance today</span><span class="num">${C.gbp(fl.start)}</span></div>
@@ -1111,8 +1129,8 @@ const VIEWS = {
         <div class="results"><div class="r"><span>${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave</span><span class="num neg">-${C.gbp(fl.outgoings)}</span></div>
         ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>` : ''}</div>`;
     }
-    h += `<div class="grid2" style="margin-top:14px">${field('Bank balance today', inp('money.balance', S.money.balance, 'number', 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}</div>
-      ${S.money.balanceOn && S.money.balanceOn !== C.today() ? `<div class="note">Balance last updated ${esc(C.fmtD(S.money.balanceOn))} — retype it to bring this up to date.</div>` : ''}
+    h += `<div class="grid2" style="margin-top:14px">${field('Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}</div>
+      <div class="note">Overdrawn? Type the amount, then tap <b>+</b> beside it to flip it to <b>−</b>.${S.money.balanceOn && S.money.balanceOn !== C.today() ? ` Balance last updated ${esc(C.fmtD(S.money.balanceOn))} — retype it to bring this up to date.` : ''}</div>
       ${m.undated ? `<div class="banner" style="margin-top:12px"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} under Bills below.</div>` : ''}
       ${fl.events.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
         (() => { let bal = fl.hasBal ? fl.start : null;
@@ -1145,7 +1163,7 @@ const VIEWS = {
       <div class="chartwrap"><canvas id="chart"></canvas></div><div class="chartkey"><span><i style="background:var(--brand)"></i>Earnings</span><span><i style="background:var(--teal)"></i>Disposable</span><span class="muted">last 12 months — swipe to see them all</span></div></div>`;
     h += `<div class="card"><h2>Month by month</h2><div class="muted small">Type earnings and what you actually saved. Bills and disposable work themselves out.</div>
       ${months.map(x => { const i = S.money.months.findIndex(q => q.month === x.month); return `<div class="mrow"><div class="mhead"><b>${esc(C.fmtM(x.month))}</b><span class="disp ${x.disposable < 0 ? 'neg' : ''}">${x.has ? C.gbp(x.disposable) : '<span class="muted" style="font-weight:600">no earnings yet</span>'}</span></div>
-        <div class="mgrid">${field('Earnings', inp(`money.months.${i}.earnings`, x.earnings))}${field('Actually saved', inp(`money.months.${i}.saved`, x.saved))}</div>
+        <div class="mgrid">${field('Earnings', inp(`money.months.${i}.earnings`, x.earnings))}${field('Actually saved', signedInp(`money.months.${i}.saved`, x.saved))}</div>
         ${x.has ? `<div class="note">Bills ${C.gbp(x.outgoings)} · potential savings ${C.gbp(x.potential)} (disposable minus the ${C.gbp(S.money.buffer, 0)} buffer)</div>` : ''}</div>`; }).join('') || '<div class="empty">No months yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="showAllMonths">${ui.showAllMonths ? 'Show fewer months' : 'Show all months'}</button><button class="btn sm" data-act="addMonth">Add ${esc(C.fmtM(nextMonthKey()))}</button></div></div>`;
 
@@ -1381,6 +1399,15 @@ document.addEventListener('click', async e => {
   if (a === 'hstep') { const h = S.pay.hours[d.payday] = S.pay.hours[d.payday] || {}; h[d.kind] = Math.max(0, C.num(h[d.kind]) + (+d.d)); if (!h.ot && !h.sun) delete S.pay.hours[d.payday]; commit(); return; }
   if (a === 'toggle') { ui[d.key] = !ui[d.key]; render(); return; }
   if (a === 'shift') { S.money.dueShift = d.v; commit(); return; }
+  if (a === 'sign') {
+    const wrap = t.closest('.signed'), el = wrap && wrap.querySelector('input');
+    if (!el) return;
+    const raw = el.value.trim();
+    if (raw === '' || isNaN(parseFloat(raw))) { el.focus(); toast('Type the amount first, then tap ±'); return; }
+    setPath(S, el.dataset.set, -parseFloat(raw));
+    if (el.dataset.set === 'money.balance') S.money.balanceOn = C.today();
+    commit(); return;
+  }
   if (a === 'morePeriods') { ui.flowPeriods = ui.flowPeriods >= 12 ? 4 : ui.flowPeriods + 4; render(); return; }
   if (a === 'set') { ui.set = d.set; ui.search = ''; render(); return; }
   if (a === 'tick') { const it = S[d.col][+d.i]; it.have = !it.have; commit(); return; }
