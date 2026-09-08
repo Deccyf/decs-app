@@ -1,5 +1,5 @@
 /* Dec's Stuff — offline cache. Bump V whenever index.html changes. */
-const V = 'decs-stuff-v8';
+const V = 'decs-stuff-v9';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 const NET_TIMEOUT = 2500;
 
