@@ -1,12 +1,13 @@
 {
+  "id": "/decs-stuff/",
   "name": "Dec's Stuff",
   "short_name": "Dec's Stuff",
-  "description": "Pay, money, house jobs, collections and games log.",
+  "description": "Pay, cash flow, bills, house jobs, collections and games log.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#EEF2F7",
+  "background_color": "#F4F7FB",
   "theme_color": "#1F3A5F",
   "icons": [
     {
