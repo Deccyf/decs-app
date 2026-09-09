@@ -1,5 +1,5 @@
-/* Dec's Stuff — offline cache. Bump V whenever index.html changes. */
-const V = 'decs-stuff-v10';
+/* Dec's Tracker — offline cache. Bump V whenever index.html changes. */
+const V = 'decs-tracker-v11';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 const NET_TIMEOUT = 2500;
 
@@ -8,7 +8,8 @@ self.addEventListener('install', e => {
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
-    .then(ks => Promise.all(ks.filter(k => k !== V && k.startsWith('decs-stuff-v')).map(k => caches.delete(k))))
+    // the app used to be "Dec's Stuff", so sweep up caches under the old name too
+    .then(ks => Promise.all(ks.filter(k => k !== V && /^decs-(stuff|tracker)-v/.test(k)).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 

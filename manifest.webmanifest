@@ -1,8 +1,8 @@
 {
   "id": "/decs-stuff/",
-  "name": "Dec's Stuff",
-  "short_name": "Dec's Stuff",
-  "description": "Pay, cash flow, bills, house jobs, collections and games log.",
+  "name": "Dec's Tracker",
+  "short_name": "Dec's Tracker",
+  "description": "Pay, cash flow, bills, debts, house jobs, collections and games \u2014 all tracked in one place.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

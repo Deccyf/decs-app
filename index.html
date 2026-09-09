@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>Dec's Stuff</title>
+<title>Dec's Tracker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231F3A5F'/%3E%3Ctext x='32' y='43' font-family='Arial' font-weight='800' font-size='30' fill='%232A9D8F' text-anchor='middle'%3ED%3C/text%3E%3C/svg%3E">
 <style>
 /* ===================================================================
@@ -93,8 +93,6 @@ main{padding:2px 12px 20px;max-width:760px;margin:0 auto}
    =================================================================== */
 .card{background:var(--card);border:1px solid var(--card-brd);border-radius:var(--r-lg);
   padding:16px;margin:12px 0;box-shadow:var(--sh-2)}
-.card.flush{padding:16px 0}
-.card.flush>*{padding-left:16px;padding-right:16px}
 .card h2{margin:0 0 4px;font-size:16.5px;font-weight:800;color:var(--ink);letter-spacing:-.015em;
   display:flex;align-items:center;gap:8px;justify-content:space-between}
 .card h2 .hint{flex:0 0 auto;font-weight:600;font-size:12px;color:var(--muted);letter-spacing:0;text-align:right}
@@ -116,7 +114,6 @@ main{padding:2px 12px 20px;max-width:760px;margin:0 auto}
   display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;isolation:isolate}
 .tile::after{content:"";position:absolute;inset:0;z-index:-1;
   background:linear-gradient(150deg,rgba(255,255,255,.16),rgba(255,255,255,0) 62%)}
-.tile.wide{grid-column:1/-1;min-height:0}
 .tile .cap{font-size:10.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;opacity:.88}
 .tile .val{font-size:25px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;
   line-height:1.1;margin:7px 0 3px;overflow-wrap:anywhere}
@@ -126,10 +123,6 @@ main{padding:2px 12px 20px;max-width:760px;margin:0 auto}
 .teal{background:var(--teal);color:#06231F}
 .amber{background:var(--amber);color:#3A2E0B}
 .coral{background:var(--coral);color:#3A1408}
-.forest{background:var(--forest);color:#05230F}
-.slate{background:var(--slate);color:#fff}
-:root[data-theme="dark"] .slate{color:#0B1220}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .slate{color:#0B1220}}
 
 /* ===================================================================
    Rows / lists
@@ -152,7 +145,6 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .field textarea{min-height:0}
 .field input:disabled{background:var(--card-2);color:var(--muted)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .full{grid-column:1/-1}
 .check{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:14px;cursor:pointer}
 .check input{width:22px;height:22px;accent-color:var(--teal);flex:0 0 22px}
@@ -237,7 +229,6 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .results .r.extra small{display:block;font-weight:600;font-size:12px;opacity:.8}
 .tag{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.1em;padding:3px 7px;
   border-radius:var(--r-xs);background:var(--teal);color:#06231F;vertical-align:middle;margin-left:7px}
-.tag.grey{background:var(--chip);color:var(--muted)}
 
 .board .brow{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:11px 0;
   border-bottom:1px solid var(--line);cursor:pointer;text-align:left;width:100%;border-left:0;border-right:0;
@@ -384,7 +375,7 @@ dialog::backdrop{background:rgba(8,12,20,.55);backdrop-filter:blur(3px)}
 </head>
 <body>
 <header id="hdr">
-  <div class="hgrp"><h1 id="title">Dec's Stuff</h1><div class="sub" id="sub"></div></div>
+  <div class="hgrp"><h1 id="title">Dec's Tracker</h1><div class="sub" id="sub"></div></div>
   <button class="iconbtn" data-act="theme" id="themeBtn" aria-label="Change theme"></button>
 </header>
 <main id="view"></main>
@@ -474,6 +465,9 @@ const C = (() => {
   }
 
   /* ---------- pay ---------- */
+  const TAXKEYS = ['personalAllowance', 'basicRate', 'basicBand', 'higherRate', 'higherBand', 'addRate', 'niPT', 'niUEL', 'niMain', 'niUpper'];
+  const TAXDEF = { personalAllowance: 12570, basicRate: 0.2, basicBand: 37700, higherRate: 0.4, higherBand: 125140,
+    addRate: 0.45, niPT: 12570, niUEL: 50270, niMain: 0.08, niUpper: 0.02 };
   function payCalc(p, tod) {
     tod = tod || today();
     const t = p.tax;
@@ -515,8 +509,21 @@ const C = (() => {
       return { allow: r2(out.allow), sacr: r2(out.sacr), after: r2(out.after) };
     };
     // one rate set per tax year; the entry in force on a pay day is the latest one starting on or before it
+    /* A blank rate must never read as zero — num() would turn a cleared basic
+       rate into 0% tax and overstate net pay by hundreds. Fall back to the last
+       year that had a figure, then to HMRC's published defaults. */
+    const blank = v => v === null || v === undefined || v === '';
     const years = (p.taxYears && p.taxYears.length ? p.taxYears : [Object.assign({ from: t.taxYearStart, personalAllowance: p.personalAllowance }, t)])
-      .slice().sort((a, b) => a.from.localeCompare(b.from));
+      .slice().sort((a, b) => String(a.from).localeCompare(String(b.from)))
+      .map((y, i, arr) => {
+        const out = Object.assign({}, y);
+        TAXKEYS.forEach(k => {
+          if (!blank(out[k])) return;
+          for (let j = i - 1; j >= 0; j--) if (!blank(arr[j][k])) { out[k] = arr[j][k]; return; }
+          out[k] = TAXDEF[k];
+        });
+        return out;
+      });
     const ratesOn = day => { let e = years[0]; years.forEach(x => { if (day >= x.from) e = x; }); return e; };
     // 6 April boundary the pay day belongs to
     const aprilStart = day => { const y = +day.slice(0, 4); return day >= `${y}-04-06` ? `${y}-04-06` : `${y - 1}-04-06`; };
@@ -619,7 +626,7 @@ const C = (() => {
         paid = due;
       }
       const nic = niOn(taxable, e);
-      Object.assign(r, { extraGross, taxable, taxWeek: 4 * n, paye: tax, ni: nic,
+      Object.assign(r, { extraGross, taxable, paye: tax, ni: nic,
         net: taxable - tax - nic - r.after,
         extra: extraGross ? extraGross - marginal - (nic - niOn(taxable - extraGross, e)) : 0 });
       r.keep = extraGross ? r.extra / extraGross : null;
@@ -630,8 +637,7 @@ const C = (() => {
     const totals = { ot: tot('ot'), sun: tot('sun'), otPay: tot('otPay'), sunPay: tot('sunPay'), hpaPay: tot('hpaPay'), backpay: tot('backpay'), taxable: tot('taxable'), paye: tot('paye'), ni: tot('ni'), net: tot('net'), extra: tot('extra'), extraGross: tot('extraGross') };
     totals.keep = totals.extraGross ? totals.extra / totals.extraGross : null;
     let nextIdx = rows.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(rows.findIndex(r => !r.past), 0);
-    const basicOnly = { taxable: basic + allow - sacr }; basicOnly.paye = paye(basicOnly.taxable); basicOnly.ni = ni(basicOnly.taxable); basicOnly.net = basicOnly.taxable - basicOnly.paye - basicOnly.ni - after;
-    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, basicOnly, hpa, rises: riseCalc, years, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
+    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
   /* ---------- money ---------- */
@@ -668,11 +674,10 @@ const C = (() => {
     const debtTotal = debts.reduce((a, d) => a + num(d.balance), 0);
     const repayTotal = debts.reduce((a, d) => a + num(d.repayment), 0);
     const st = debtCalc.filter(d => d.type === 'Short-term');
-    const stTotal = st.reduce((a, d) => a + num(d.balance), 0);
     const stClear = st.map(d => d.payoff).filter(x => x && x.date).map(x => x.date).sort().pop() || null;
     return { bills, active, activeTotal, dated, undated: active.length - dated.length, byCat, months,
       byYear: Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year)), latest, yearRow, thisMonthKey,
-      debts: debtCalc, debtTotal, repayTotal, stTotal, stClear, last12: last12(months, latest) };
+      debts: debtCalc, debtTotal, repayTotal, stClear, last12: last12(months, latest) };
   }
   function last12(months, latest) {
     if (!latest) return [];
@@ -873,6 +878,18 @@ function normalize() {
   m.bills.forEach(b => { if (!b.id) b.id = uid(); if (b.dueDay === undefined) b.dueDay = null; });
   m.debts.forEach(d => { if (!d.id) d.id = uid(); });
   m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
+  /* A restored backup can carry months out of order, or the same month twice.
+     Unsorted rows make "latest month" and the chart wrong; duplicates double
+     count in the yearly totals. Merge and sort so neither can happen. */
+  const blank = v => v === null || v === undefined || v === '';
+  const byMonth = new Map();
+  m.months.forEach(x => {
+    const prev = byMonth.get(x.month);
+    if (!prev) { byMonth.set(x.month, x); return; }
+    if (blank(prev.earnings) && !blank(x.earnings)) prev.earnings = x.earnings;
+    if (blank(prev.saved) && !blank(x.saved)) prev.saved = x.saved;
+  });
+  m.months = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
   const P = S.pay;
   ['fixed', 'rises', 'taxYears'].forEach(k => arr(P, k));
   ['hours', 'hpaHistory', 'tax'].forEach(k => obj(P, k));
@@ -895,7 +912,6 @@ function normalize() {
   ['house', 'games'].forEach(k => S[k].forEach(x => { if (!x.id) x.id = uid(); }));
   S.house.forEach(j => { if (!['To do', 'In progress', 'Done'].includes(j.status)) j.status = 'To do'; });
 }
-function getPath(o, p) { return p.split('.').reduce((a, k) => (a == null ? a : a[k]), o); }
 function setPath(o, p, v) {
   const ks = p.split('.'); const last = ks.pop();
   const t = ks.reduce((a, k) => (a && typeof a === 'object' ? (a[k] = a[k] || {}) : null), o);
@@ -1066,7 +1082,7 @@ const VIEWS = {
       ${recent(4)}</div>`;
 
     h += backupCard('Settings & backup', `Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Settings each April.`);
-    return { title: `${S.name || 'Dec'}'s Stuff`, sub: C.fmtD(C.today()), html: h };
+    return { title: `${S.name || 'Dec'}'s Tracker`, sub: C.fmtD(C.today()), html: h };
   },
 
   pay() {
@@ -1198,6 +1214,9 @@ const VIEWS = {
           <div class="full"><button class="btn danger sm" data-act="delBill" data-i="${i}">Remove ${esc(b.name || 'bill')}</button></div></div>`).join('') || '<div class="empty">No bills yet.</div>'
         : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span style="color:var(--warn)">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editBills">${ui.editBills ? 'Done' : 'Edit bills'}</button>${ui.editBills ? '<button class="btn sm" data-act="addBill">Add bill</button>' : ''}</div>
+      ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+        return cats.length > 1 ? `<div class="sep"></div><div class="eyebrow">Where it goes each month</div>
+          ${cats.map(([k, v]) => `<div class="prow"><span><b>${esc(k)}</b></span><span class="num muted small">${C.gbp(v, 0)} · ${C.pct(v / m.activeTotal)}</span>${bar(v / m.activeTotal, 'teal')}</div>`).join('')}` : ''; })()}
       <div class="note">The day of the month is what makes the cash flow above work. Use 31 for "last day" — short months fall back to the 28th, 29th or 30th automatically. Price change? Overwrite the amount, or to keep history add a new row with a Started month and set Ended on the old one.</div></div>`;
 
     /* --- 5. debt --- */
@@ -1490,7 +1509,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 /* ---------- backup ---------- */
 function exportBackup() {
   const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }); const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `decs-stuff-${C.today()}.json`; document.body.appendChild(a); a.click();
+  a.href = URL.createObjectURL(blob); a.download = `decs-tracker-${C.today()}.json`; document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800); toast('Backup downloaded');
 }
 function importBackup(file) {
