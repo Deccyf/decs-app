@@ -151,7 +151,7 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
   padding:11px 12px;background:var(--fld);width:100%;min-width:0;min-height:var(--tap)}
 .field textarea{min-height:0}
 .field input:disabled{background:var(--card-2);color:var(--muted)}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .full{grid-column:1/-1}
 .check{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:14px;cursor:pointer}
@@ -281,6 +281,7 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .lrow .ln small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
 .lrow .lv{text-align:right;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}
 .lrow .lv small{display:block;font-weight:600;color:var(--muted);font-size:11.5px}
+.lrow.gone{opacity:.6}.lrow.gone .lv{color:var(--muted);font-weight:600}
 .moved{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
   padding:2px 6px;border-radius:var(--r-xs);background:var(--warn-bg);color:var(--warn);margin-left:6px;vertical-align:1px}
 .perrow{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
@@ -735,7 +736,17 @@ const C = (() => {
     const events = billEvents(m, tod, to, opt);
     const out = events.reduce((a, e) => a + e.amount, 0);
     const hasBal = m.balance !== null && m.balance !== undefined && m.balance !== '';
-    const start = hasBal ? num(m.balance) : null;
+    const typed = hasBal ? num(m.balance) : null;
+    /* Carry the typed figure forward. Everything that has left, or landed,
+       between the day it was true and yesterday comes off it — a payment dated
+       today may not have gone through yet, so it stays in the "still to leave"
+       list below rather than being counted twice. */
+    const typedOn = hasBal && m.balanceOn && m.balanceOn < tod ? m.balanceOn : null;
+    const carried = typedOn ? billEvents(m, addDays(typedOn, 1), addDays(tod, -1), opt) : [];
+    const carriedOut = r2(carried.reduce((a, e) => a + e.amount, 0));
+    const carriedPays = typedOn ? p.rows.filter(r => r.payday > typedOn && r.payday < tod) : [];
+    const carriedIn = r2(carriedPays.reduce((a, r) => a + num(r.net), 0));
+    const start = hasBal ? r2(typed - carriedOut + carriedIn) : null;
     const days = Math.max(daysBetween(tod, to), 0);
     // running balance, one point per day, so the dip between bills is visible
     const series = [];
@@ -752,6 +763,9 @@ const C = (() => {
     const low = series.length ? series.reduce((a, x) => x.bal < a.bal ? x : a, series[0]) : null;
     return {
       from: tod, to, days, events, outgoings: r2(out), start, hasBal, atPayday, buffer, series, low,
+      typed, typedOn, carried, carriedOut, carriedIn, carriedPays,
+      staleDays: typedOn ? daysBetween(typedOn, tod) : 0,
+      wasCarried: !!typedOn && (carried.length > 0 || carriedPays.length > 0),
       safe: hasBal ? r2(atPayday - buffer) : null,
       perDay: hasBal && days > 0 ? r2((atPayday - buffer) / days) : null,
       net: payRow ? payRow.net : null,
@@ -852,6 +866,8 @@ function normalize() {
   if (m.buffer === undefined) m.buffer = 0;
   if (m.balance === undefined) m.balance = null;
   if (m.balanceOn === undefined) m.balanceOn = null;
+  // a balance carried over from before this feature has no date — treat it as true today
+  if (m.balance !== null && m.balance !== undefined && m.balance !== '' && !m.balanceOn) m.balanceOn = C.today();
   if (m.dueShift !== 'exact' && m.dueShift !== 'prev' && m.dueShift !== 'next') m.dueShift = 'next';
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
   m.bills.forEach(b => { if (!b.id) b.id = uid(); if (b.dueDay === undefined) b.dueDay = null; });
@@ -1116,8 +1132,8 @@ const VIEWS = {
         ${fl.perDay != null && fl.safe > 0 ? `<div class="per"><b>${C.gbp(fl.perDay)}</b>a day</div>` : ''}</div>
         <div class="sparkwrap">${sparkline(fl.series)}</div>
         <div class="results">
-          <div class="r"><span>Balance today</span><span class="num">${C.gbp(fl.start)}</span></div>
-          <div class="r"><span>${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave</span><span class="num neg">-${C.gbp(fl.outgoings)}</span></div>
+          <div class="r"><span>${fl.wasCarried ? 'Estimated balance today' : 'Balance today'}</span><span class="num">${C.gbp(fl.start)}</span></div>
+          <div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
           <div class="r"><span>Balance the morning of pay day</span><span class="num">${C.gbp(fl.atPayday)}</span></div>
           ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>
           <div class="r total"><span>Balance after pay</span><span class="num">${C.gbp(fl.afterPay)}</span></div>` : ''}
@@ -1126,11 +1142,17 @@ const VIEWS = {
       else if (fl.low && fl.low.bal < fl.buffer) h += `<div class="banner"><b>It gets tight.</b> Lowest point is ${C.gbp(fl.low.bal)} on ${esc(C.fmtD(fl.low.date))}, under your ${C.gbp(fl.buffer, 0)} buffer.</div>`;
     } else {
       h += `<div class="banner info">Put today's bank balance in below and this works out what's genuinely free to spend before ${esc(C.fmtD(fl.to))} — bills counted on the day they actually leave.</div>
-        <div class="results"><div class="r"><span>${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave</span><span class="num neg">-${C.gbp(fl.outgoings)}</span></div>
+        <div class="results"><div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
         ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>` : ''}</div>`;
     }
-    h += `<div class="grid2" style="margin-top:14px">${field('Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}</div>
-      <div class="note">Overdrawn? Type the amount, then tap <b>+</b> beside it to flip it to <b>−</b>.${S.money.balanceOn && S.money.balanceOn !== C.today() ? ` Balance last updated ${esc(C.fmtD(S.money.balanceOn))} — retype it to bring this up to date.` : ''}</div>
+    h += `${fl.wasCarried ? `<div class="note" style="margin-top:2px">Carried forward from the <b>${C.gbp(fl.typed)}</b> you entered on ${esc(C.fmtD(fl.typedOn))}${fl.carriedOut ? `, less <b>${C.gbp(fl.carriedOut)}</b> of bills` : ''}${fl.carriedIn ? `, plus <b>${C.gbp(fl.carriedIn)}</b> of pay` : ''} since.</div>` : ''}
+      ${fl.wasCarried ? detailsBlock('carried', `What's come off since ${C.fmtDM(fl.typedOn)}`,
+        `<div class="ledger">${fl.carried.map(e => ledgerRow(e, null, true)).join('')}${fl.carriedPays.map(r => `<div class="lrow gone"><div class="ld"><span>${esc(C.DOW[C.dow(r.payday)])}</span>${+r.payday.slice(8)}</div>
+          <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(r.payday)))}</small></div><div class="lv pos">+${C.gbp(r.net)}</div></div>`).join('')}</div>
+         <div class="note">Only bills and pay are counted here. Day-to-day spending isn't — so retype your balance whenever you check the bank, and the running total starts again from that figure.</div>`) : ''}
+      <div class="grid2" style="margin-top:14px">${field(fl.typedOn ? `Balance (${C.fmtDM(fl.typedOn)})` : 'Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}</div>
+      <div class="note">Retype this whenever you check your bank — the running total restarts from whatever you enter, and bills come off again as the days pass. Overdrawn? Type the amount, then tap <b>+</b> beside it to flip it to <b>−</b>.</div>
+      ${fl.staleDays >= 14 ? `<div class="banner" style="margin-top:12px"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
       ${m.undated ? `<div class="banner" style="margin-top:12px"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} under Bills below.</div>` : ''}
       ${fl.events.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
         (() => { let bal = fl.hasBal ? fl.start : null;
@@ -1219,8 +1241,8 @@ const VIEWS = {
 const CATS = ['Housing', 'Utilities', 'Insurance', 'Transport', 'Phone', 'Subscriptions', 'Health & Fitness', 'Debt & Finance', 'Other'];
 
 /* ---------- components ---------- */
-function ledgerRow(e, runningBal) {
-  return `<div class="lrow"><div class="ld"><span>${esc(C.DOW[C.dow(e.date)])}</span>${+e.date.slice(8)}</div>
+function ledgerRow(e, runningBal, gone) {
+  return `<div class="lrow${gone ? ' gone' : ''}"><div class="ld"><span>${esc(C.DOW[C.dow(e.date)])}</span>${+e.date.slice(8)}</div>
     <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
     <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
 }
@@ -1456,6 +1478,13 @@ document.addEventListener('toggle', e => { if (e.target.dataset && e.target.data
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'g_name') { e.preventDefault(); $('#g_notes').focus(); } });
 addEventListener('scroll', () => { $('#hdr').classList.toggle('stuck', window.scrollY > 4); }, { passive: true });
 let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawChart, 150); });
+/* Left open overnight, or resumed from the background, the figures would still
+   be yesterday's. Redraw whenever the day actually turns over. */
+let lastDay = C.today();
+function dayWatch() { const d = C.today(); if (d !== lastDay) { lastDay = d; render(); } }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) dayWatch(); });
+addEventListener('focus', dayWatch);
+setInterval(dayWatch, 60000);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (theme === 'auto') { applyTheme(); drawChart(); } });
 
 /* ---------- backup ---------- */
@@ -1481,7 +1510,7 @@ function importBackup(file) {
 try { const t = localStorage.getItem(THEME_KEY); if (t === 'light' || t === 'dark' || t === 'auto') theme = t; } catch (e) { }
 applyTheme();
 buildTabs();
-S = load(); normalize();
+S = load(); normalize(); save();
 if (PAY_ONLY) { tab = 'pay'; $('#tabs').style.display = 'none'; document.body.classList.add('notabs'); }
 render(false);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => { });
