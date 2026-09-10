@@ -133,10 +133,10 @@ test('a half-empty backup does not white-screen', skip, async t => {
 });
 
 test('the day turning over redraws the figures', skip, async t => {
-  const page = await open(t, { on: '2026-09-14', tab: 'money' });
+  const page = await open(t, { on: '2026-09-13', tab: 'money' });   // Council due Sun 13 -> clears Mon 14
   assert.match(await page.$eval('.results .r', e => e.textContent), /Balance today.*£1,000/);
   await page.evaluate(() => {
-    const F = new Date('2026-09-15T09:00:00Z').getTime(), R = Object.getPrototypeOf(Date);
+    const F = new Date('2026-09-14T09:00:00Z').getTime(), R = Object.getPrototypeOf(Date);
     class D extends R { constructor(...a) { a.length ? super(...a) : super(F); } static now() { return F; } }
     window.Date = D;
   });
@@ -388,4 +388,20 @@ test('the PIN is set once, not re-configured each time', skip, async t => {
   }
   // still the same PIN, never re-set
   assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).decsEnc, 1);
+});
+
+test('the home card totals only the payments it is not showing', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.balanceOn = '2026-09-01';
+  data.money.bills = [
+    { id: 'a', name: 'A', category: 'Other', amount: 10, dueDay: 11, started: '2024-01' },
+    { id: 'b', name: 'B', category: 'Other', amount: 20, dueDay: 12, started: '2024-01' },
+    { id: 'c', name: 'C', category: 'Other', amount: 30, dueDay: 15, started: '2024-01' },
+    { id: 'd', name: 'D', category: 'Other', amount: 40, dueDay: 16, started: '2024-01' },
+    { id: 'e', name: 'E', category: 'Other', amount: 50, dueDay: 17, started: '2024-01' }
+  ];
+  const page = await open(t, { on: '2026-09-10', data });
+  const note = await page.$eval('#view .card .note', e => e.textContent.replace(/\s+/g, ' ').trim());
+  // three shown (10 + 20 + 30), two not (40 + 50 = 90), 150 altogether
+  assert.match(note, /\+ 2 more before pay day — £90\.00 of them, £150\.00 altogether/);
 });

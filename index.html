@@ -275,6 +275,7 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .lrow.gone{opacity:.6}.lrow.gone .lv{color:var(--muted);font-weight:600}
 .moved{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
   padding:2px 6px;border-radius:var(--r-xs);background:var(--warn-bg);color:var(--warn);margin-left:6px;vertical-align:1px}
+.moved.today{background:var(--good-bg);color:var(--good)}
 .perrow{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
 .perrow:last-child{border-bottom:0}
 .perrow .pb{grid-column:1/-1}
@@ -766,16 +767,21 @@ const C = (() => {
     tod = tod || today();
     const to = p.nextPayDay;
     const payRow = p.rows[p.nextIdx] || null;
-    const events = billEvents(m, tod, to, opt);
+    const events = billEvents(m, addDays(tod, 1), to, opt);
     const out = events.reduce((a, e) => a + e.amount, 0);
     const hasBal = m.balance !== null && m.balance !== undefined && m.balance !== '';
     const typed = hasBal ? num(m.balance) : null;
-    /* Carry the typed figure forward. Everything that has left, or landed,
-       between the day it was true and yesterday comes off it — a payment dated
-       today may not have gone through yet, so it stays in the "still to leave"
-       list below rather than being counted twice. */
+    /* Carry the typed figure forward over everything that has left, or landed,
+       since the day it was true — today included. Direct debits clear in the
+       early-morning batch, so by the time anyone looks, a payment dated today
+       has almost always gone; counting it as still to come would overstate the
+       balance, and overstating is the dangerous direction for a figure whose
+       job is warning you that you are short.
+
+       When the balance was typed today the window is empty by construction:
+       what you just read off your bank supersedes everything up to now. */
     const typedOn = hasBal && m.balanceOn && m.balanceOn < tod ? m.balanceOn : null;
-    const carried = typedOn ? billEvents(m, addDays(typedOn, 1), addDays(tod, -1), opt) : [];
+    const carried = typedOn ? billEvents(m, addDays(typedOn, 1), tod, opt) : [];
     const carriedOut = r2(carried.reduce((a, e) => a + e.amount, 0));
     const carriedPays = typedOn ? p.rows.filter(r => r.payday > typedOn && r.payday < tod) : [];
     const carriedIn = r2(carriedPays.reduce((a, r) => a + num(r.net), 0));
@@ -1263,7 +1269,8 @@ const VIEWS = {
       h += `<div class="card"><h2>Still to come out<span class="hint">${fl.events.length} before pay day</span></h2>
         ${fl.hasBal && fl.shortfall ? `<div class="banner bad" style="margin:8px 0"><b>That doesn't stretch.</b> The balance dips to ${C.gbp(fl.low.bal)} on ${esc(C.fmtD(fl.low.date))}.</div>` : ''}
         ${nextFew.length ? `<div class="ledger">${nextFew.map(e => ledgerRow(e)).join('')}</div>` : '<div class="empty">Nothing left to leave before pay day.</div>'}
-        ${fl.events.length > 3 ? `<div class="note">+ ${fl.events.length - 3} more, totalling ${C.gbp(fl.outgoings)}.</div>` : ''}
+        ${(() => { const rest = fl.events.slice(3);
+          return rest.length ? `<div class="note">+ ${rest.length} more before pay day — ${C.gbp(rest.reduce((a, e) => a + e.amount, 0))} of them, ${C.gbp(fl.outgoings)} altogether.</div>` : ''; })()}
         <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money">Open cash flow</button></div></div>`;
     }
 
@@ -1480,7 +1487,7 @@ const CATS = ['Housing', 'Utilities', 'Insurance', 'Transport', 'Phone', 'Subscr
 /* ---------- components ---------- */
 function ledgerRow(e, runningBal, gone) {
   return `<div class="lrow${gone ? ' gone' : ''}"><div class="ld"><span>${esc(C.DOW[C.dow(e.date)])}</span>${+e.date.slice(8)}</div>
-    <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
+    <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
     <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
 }
 function stepper(label, payday, kind, val) {

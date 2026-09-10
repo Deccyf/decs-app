@@ -123,16 +123,19 @@ test('the typed balance is carried forward as bills leave', () => {
   assert.equal(runAt(m, '2026-09-22').start, 736, 'Energy gone too');
 });
 
-test('a bill is counted once, on the day after it leaves', () => {
+test('a bill is counted once, on the day it leaves', () => {
   const m = carryMoney(1000, '2026-09-09');
-  const on14 = runAt(m, '2026-09-14');           // Council shifts Sun 13 -> Mon 14
-  assert.deepEqual(on14.carried.map(e => e.name), [], 'not yet deducted');
-  assert.deepEqual(on14.events.map(e => e.name), ['Council', 'Energy'], 'still listed as to come');
-  assert.equal(on14.start, 1000);
-  const on15 = runAt(m, '2026-09-15');
-  assert.deepEqual(on15.carried.map(e => e.name), ['Council']);
-  assert.deepEqual(on15.events.map(e => e.name), ['Energy']);
-  assert.equal(on15.start, 832);
+  const before = runAt(m, '2026-09-13');         // Council is due Sun 13, so it shifts to Mon 14
+  assert.deepEqual(before.carried.map(e => e.name), [], 'nothing gone yet');
+  assert.deepEqual(before.events.map(e => e.name), ['Council', 'Energy'], 'both still ahead');
+  assert.equal(before.start, 1000);
+
+  const onTheDay = runAt(m, '2026-09-14');
+  assert.deepEqual(onTheDay.carried.map(e => e.name), ['Council'], 'counted on the day it leaves');
+  assert.deepEqual(onTheDay.events.map(e => e.name), ['Energy'], 'and not also listed as still to come');
+  assert.equal(onTheDay.start, 832);
+
+  assert.equal(runAt(m, '2026-09-15').start, 832, 'counted exactly once');
 });
 
 test('the projected pay-day balance holds steady as bills go out', () => {
@@ -317,4 +320,47 @@ test('a price drop is reported as a drop', () => {
   ]);
   assert.equal(h[0].total, -12);
   assert.ok(h[0].last.pct < 0);
+});
+
+test('a payment dated today counts as already gone', () => {
+  const m = Object.assign(bills(
+    { id: '1', name: 'Car Insurance', amount: 48.39, dueDay: 10, started: '2024-01' },
+    { id: '2', name: 'Pet Insurance', amount: 36.53, dueDay: 14, started: '2024-01' }
+  ), { buffer: 0, balance: -43.08, balanceOn: '2026-09-08' });
+  const p = { nextPayDay: '2026-09-25', nextIdx: 0, rows: [{ payday: '2026-09-25', net: 3455.34 }] };
+  const at = d => C.runway(m, p, OPT, d);
+
+  const before = at('2026-09-09');
+  assert.deepEqual(before.carried.map(e => e.name), [], 'not yet');
+  assert.equal(before.start, -43.08);
+
+  const today = at('2026-09-10');                       // the day it is due
+  assert.deepEqual(today.carried.map(e => e.name), ['Car Insurance'], 'counted as cleared on the day');
+  assert.equal(today.start, -91.47);
+  assert.deepEqual(today.events.map(e => e.name), ['Pet Insurance'], 'no longer listed as still to come');
+
+  const after = at('2026-09-11');
+  assert.equal(after.start, -91.47, 'and it does not move again the next day');
+
+  // the figure that matters must not drift as the boundary passes
+  assert.deepEqual([before.atPayday, today.atPayday, after.atPayday], [-128, -128, -128]);
+});
+
+test('a balance typed today supersedes the same day\'s bills', () => {
+  const m = Object.assign(bills({ id: '1', name: 'Car Insurance', amount: 48.39, dueDay: 10, started: '2024-01' }),
+    { buffer: 0, balance: -43.08, balanceOn: '2026-09-10' });
+  const p = { nextPayDay: '2026-09-25', nextIdx: 0, rows: [{ payday: '2026-09-25', net: 3455.34 }] };
+  const r = C.runway(m, p, OPT, '2026-09-10');
+  assert.equal(r.carried.length, 0, 'what you read off the bank wins');
+  assert.equal(r.start, -43.08, 'not deducted a second time');
+});
+
+test('pay landing today stays in the pay row rather than the carry', () => {
+  const m = Object.assign(bills({ id: '1', name: 'Rent', amount: 100, dueDay: 1, started: '2024-01' }),
+    { buffer: 0, balance: 500, balanceOn: '2026-09-20' });
+  const p = { nextPayDay: '2026-09-25', nextIdx: 0, rows: [{ payday: '2026-09-25', net: 2000 }] };
+  const r = C.runway(m, p, OPT, '2026-09-25');          // today IS pay day
+  assert.equal(r.carriedIn, 0, 'not counted twice');
+  assert.equal(r.net, 2000);
+  assert.equal(r.afterPay, C.r2(r.atPayday + 2000));
 });
