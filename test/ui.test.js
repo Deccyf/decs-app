@@ -62,7 +62,7 @@ async function open(t, { on = '2026-09-09', data = SAMPLE, tab = null } = {}) {
   await page.goto(origin + '/index.html');
   if (data) await page.evaluate(d => localStorage.setItem('decs-stuff-v1', JSON.stringify(d)), data);
   await page.reload();
-  await page.waitForSelector('#view .card, #view .banner, #lock', { timeout: 5000 });
+  await page.waitForSelector('#view .card, #view .banner', { timeout: 5000 });
   if (tab) { await page.click(`.tabs button[data-tab="${tab}"]`); await page.waitForTimeout(250); }
   t.after(async () => { await ctx.close(); assert.deepEqual(errors, [], 'no console or page errors'); });
   return page;
@@ -217,4 +217,122 @@ test('a repeated change event cannot split the same bill twice', skip, async t =
   assert.equal(energy.length, 2, 'still exactly two rows');
   assert.deepEqual(energy.map(b => [b.amount, b.started, b.ended]),
     [[96, '2024-01', '2026-08'], [110, '2026-09', null]]);
+});
+
+/* ---------------------------------------------------------------- PIN lock -- */
+async function turnPinOn(page, pin) {
+  await page.click('[data-act="setPin"]');
+  await page.waitForTimeout(200);
+  await page.click('#dlgForm button[value="ok"]');          // "Download a backup"
+  await page.waitForTimeout(300);
+  await page.fill('#dlgIn', pin); await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(300);
+  await page.fill('#dlgIn', pin); await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(900);                            // PBKDF2 takes a moment
+}
+
+test('the app is not locked and nothing is encrypted by default', skip, async t => {
+  const page = await open(t);
+  assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('lock')).display), 'none');
+  const raw = await page.evaluate(() => localStorage.getItem('decs-stuff-v1'));
+  assert.ok(JSON.parse(raw).money, 'plain JSON on disk');
+});
+
+test('setting a PIN encrypts what is stored', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, '482913');
+  const raw = await page.evaluate(() => localStorage.getItem('decs-stuff-v1'));
+  const blob = JSON.parse(raw);
+  assert.equal(blob.decsEnc, 1);
+  assert.ok(blob.salt && blob.iv && blob.ct, 'salt, iv and ciphertext are all stored');
+  assert.equal(blob.iters, 310000);
+  assert.equal(blob.money, undefined, 'no readable data left');
+  assert.ok(!/41200|1420|Charizard|DOOM/.test(raw), 'nothing recognisable survives in the blob');
+  assert.match(await page.$eval('#view', e => e.textContent), /PIN lock/);
+});
+
+test('a PIN-locked app asks before showing anything', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, '482913');
+  await page.reload();
+  await page.waitForSelector('#lock:not([hidden])', { timeout: 5000 });
+  assert.equal(await page.$$eval('#view .card', e => e.length), 0, 'nothing rendered behind the lock');
+  assert.equal(await page.evaluate(() => document.body.classList.contains('locked')), true);
+
+  await page.fill('#pinIn', '999999');
+  await page.click('#lockGo');
+  await page.waitForTimeout(1200);
+  assert.match(await page.$eval('#lockErr', e => e.textContent), /didn.t work/);
+  assert.equal(await page.evaluate(() => document.getElementById('lock').hidden), false, 'still locked');
+
+  await page.fill('#pinIn', '482913');
+  await page.click('#lockGo');
+  await page.waitForSelector('#view .card', { timeout: 8000 });
+  assert.equal(await page.evaluate(() => document.getElementById('lock').hidden), true);
+  assert.match(await page.$eval('#view', e => e.textContent), /Safe to spend|Next pay day/);
+});
+
+test('data still saves, and stays encrypted, after unlocking', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, '482913');
+  await page.reload();
+  await page.waitForSelector('#lock:not([hidden])');
+  await page.fill('#pinIn', '482913'); await page.click('#lockGo');
+  await page.waitForSelector('#view .card', { timeout: 8000 });
+  await page.click('.tabs button[data-tab="money"]'); await page.waitForTimeout(300);
+  await page.fill('[data-set="money.balance"]', '1234');
+  await page.dispatchEvent('[data-set="money.balance"]', 'change');
+  await page.waitForTimeout(900);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).decsEnc, 1,
+    'the write went back out encrypted');
+  await page.reload();
+  await page.waitForSelector('#lock:not([hidden])');
+  await page.fill('#pinIn', '482913'); await page.click('#lockGo');
+  await page.waitForSelector('#view .card', { timeout: 8000 });
+  assert.equal(await page.evaluate(() => JSON.parse(JSON.stringify(S.money.balance))), 1234, 'and it survived');
+});
+
+test('turning the PIN off puts the data back in the clear', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, '482913');
+  await page.click('[data-act="clearPin"]');
+  await page.waitForTimeout(250);
+  await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(600);
+  assert.ok(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).money, 'plain JSON again');
+  await page.reload();
+  await page.waitForSelector('#view .card', { timeout: 5000 });
+  assert.equal(await page.evaluate(() => document.getElementById('lock').hidden), true, 'no lock screen');
+});
+
+test('a short PIN is refused', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await page.click('[data-act="setPin"]');
+  await page.waitForTimeout(200);
+  await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(300);
+  await page.fill('#dlgIn', '1234'); await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(400);
+  assert.match(await page.$eval('#toast', e => e.textContent), /at least 6/);
+  assert.ok(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).money, 'nothing encrypted');
+});
+
+test('mismatched confirmation leaves the PIN off', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await page.click('[data-act="setPin"]');
+  await page.waitForTimeout(200);
+  await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(300);
+  await page.fill('#dlgIn', '482913'); await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(300);
+  await page.fill('#dlgIn', '482914'); await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(400);
+  assert.match(await page.$eval('#toast', e => e.textContent), /didn't match/);
+  assert.ok(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).money, 'nothing encrypted');
 });

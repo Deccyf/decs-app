@@ -366,6 +366,22 @@ dialog::backdrop{background:rgba(8,12,20,.55);backdrop-filter:blur(3px)}
 .dlg p{margin:0 0 14px;color:var(--muted);font-size:13.5px;line-height:1.5}
 .dlg .btnrow{justify-content:flex-end;margin-top:16px}
 
+.lockwrap{position:fixed;inset:0;z-index:20;background:var(--bg);display:grid;place-items:center;padding:24px}
+/* a class selector beats the UA's [hidden]{display:none}, so say it explicitly */
+.lockwrap[hidden]{display:none}
+.lockcard{width:100%;max-width:320px;text-align:center;display:flex;flex-direction:column;gap:12px}
+.lockmark{width:64px;height:64px;margin:0 auto 4px;border-radius:20px;background:var(--brand);color:var(--on-brand);
+  display:grid;place-items:center;font-size:30px;font-weight:800;letter-spacing:-.03em}
+.lockcard h2{margin:0;font-size:21px;font-weight:800;letter-spacing:-.02em}
+.lockcard p{margin:0}
+.lockcard input{border:1px solid var(--fld-brd);border-radius:var(--r-sm);padding:14px;background:var(--fld);
+  width:100%;text-align:center;font-size:24px;letter-spacing:.35em;font-variant-numeric:tabular-nums;min-height:56px}
+.lockcard input::placeholder{letter-spacing:.35em;opacity:.35}
+.lockerr{color:var(--bad);font-size:13px;font-weight:700;min-height:18px}
+.locklink{border:0;background:none;color:var(--muted);font-size:13px;font-weight:600;
+  text-decoration:underline;text-underline-offset:3px;cursor:pointer;padding:8px;margin-top:4px}
+body.locked{overflow:hidden}
+body.locked header,body.locked main,body.locked .tabs{display:none}
 @media (prefers-reduced-motion:no-preference){
   main{animation:fade .2s ease-out}
   @keyframes fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
@@ -382,6 +398,18 @@ dialog::backdrop{background:rgba(8,12,20,.55);backdrop-filter:blur(3px)}
 <nav class="tabs" id="tabs" role="tablist" aria-label="Sections"></nav>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <dialog id="dlg"><form method="dialog" class="dlg" id="dlgForm"></form></dialog>
+<div class="lockwrap" id="lock" hidden>
+  <form class="lockcard" id="lockForm">
+    <div class="lockmark" aria-hidden="true">D</div>
+    <h2 id="lockTitle">Dec's Tracker</h2>
+    <p class="muted" id="lockHint">Enter your PIN to unlock</p>
+    <input type="password" inputmode="numeric" autocomplete="current-password" id="pinIn"
+      aria-label="PIN" placeholder="••••••">
+    <button class="btn" type="submit" id="lockGo">Unlock</button>
+    <div class="lockerr" id="lockErr" role="alert"></div>
+    <button type="button" class="locklink" data-act="forgotPin">Forgotten your PIN?</button>
+  </form>
+</div>
 <script id="seed" type="application/json">{"version":2,"generic":true,"name":"Dec","money":{"buffer":1000,"balance":null,"balanceOn":null,"dueShift":"next","bankHols":true,"bills":[],"months":[],"debts":[]},"house":[],"classic":[],"mega":[],"psm":[],"games":[],"goals":"","pay":{"salary":null,"hoursWeek":35,"weeksYear":52.1667,"sundayRate":3.7,"nextPayDay":"2026-08-28","periodEndDays":6,"personalAllowance":12570,"taxCode":"1257L","fixed":[],"hours":{},"hpaHistory":{},"tax":{"basicRate":0.2,"basicBand":37700,"higherRate":0.4,"higherBand":125140,"addRate":0.45,"niPT":12570,"niUEL":50270,"niMain":0.08,"niUpper":0.02,"taxYearStart":"2026-04-06"}}}</script>
 <script>
 /* ===== calc: pure functions, no DOM ===== */
@@ -880,14 +908,69 @@ const ICON = {
 };
 const svg = (d, w) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w || 1.8}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 
+/* ---------- PIN lock ----------
+   The data sits in localStorage, so a screen that merely hides the UI would be
+   theatre — anything with devtools reads straight through it. The stored blob
+   is encrypted instead: PBKDF2-SHA256 stretches the PIN into an AES-GCM key,
+   and without the PIN there is nothing readable on the device.
+
+   What this is for: someone picking up an unlocked phone. It is not proof
+   against a determined attacker with the device and time — a short numeric PIN
+   is only so many guesses, and PBKDF2 runs far faster on a GPU than a phone.
+   Six digits is the floor for that reason. */
+const CRYPTO_OK = !!(window.crypto && window.crypto.subtle);
+const PBKDF2_ITERS = 310000;
+let cryptoKey = null, cryptoSalt = null;
+
+const b64 = buf => {                       // chunked: spreading a big array blows the stack
+  const a = new Uint8Array(buf); let out = '';
+  for (let i = 0; i < a.length; i += 0x8000) out += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000));
+  return btoa(out);
+};
+const unb64 = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
+
+async function deriveKey(pin, salt, iters) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iters || PBKDF2_ITERS, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function sealText(text) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(text));
+  return JSON.stringify({ decsEnc: 1, iters: PBKDF2_ITERS, salt: b64(cryptoSalt), iv: b64(iv), ct: b64(ct) });
+}
+async function openBlob(blob, pin) {
+  const salt = unb64(blob.salt);
+  const key = await deriveKey(pin, salt, blob.iters);
+  // a wrong PIN fails the GCM tag check and throws, which is the whole point
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(blob.iv) }, key, unb64(blob.ct));
+  return { text: new TextDecoder().decode(pt), key, salt };
+}
+function encBlob(raw) {
+  if (!raw || raw[0] !== '{') return null;
+  try { const o = JSON.parse(raw); return o && o.decsEnc && o.ct && o.iv && o.salt ? o : null; } catch (e) { return null; }
+}
+const pinIsSet = () => !!cryptoKey;
+
 /* ---------- storage ---------- */
 function probeStorage() { try { localStorage.setItem('__p', '1'); localStorage.removeItem('__p'); return true; } catch (e) { return false; } }
 function load() {
   storageOK = probeStorage();
-  if (storageOK) { try { const raw = localStorage.getItem(KEY); if (raw) { const o = JSON.parse(raw); if (o && o.pay && o.money) return o; } } catch (e) { } }
+  if (storageOK) { try { const raw = localStorage.getItem(KEY); if (raw && !encBlob(raw)) { const o = JSON.parse(raw); if (o && o.pay && o.money) return o; } } catch (e) { } }
   return clone(SEED);
 }
-function save() { if (!storageOK) return; try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { storageOK = false; toast('Could not save on this device'); } }
+/* Encryption is async, so writes are queued rather than fired off in parallel —
+   the snapshot is taken synchronously so they still land in the right order. */
+let saveChain = Promise.resolve();
+function save() {
+  if (!storageOK) return saveChain;
+  const snapshot = JSON.stringify(S);
+  saveChain = saveChain.then(async () => {
+    try { localStorage.setItem(KEY, cryptoKey ? await sealText(snapshot) : snapshot); }
+    catch (e) { storageOK = false; toast('Could not save on this device'); }
+  });
+  return saveChain;
+}
 
 /* Fill in anything a backup is missing. A file from an older version — or a
    half-finished one — must never leave the app with a blank screen. */
@@ -972,11 +1055,11 @@ function cycleTheme() {
 /* ---------- dialogs (replaces prompt/confirm, which mobile browsers can block) ---------- */
 let dlgQueue = Promise.resolve();
 function dialog(opts) { return (dlgQueue = dlgQueue.then(() => showDialog(opts), () => showDialog(opts))); }
-function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = false, input = null }) {
+function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = false, input = null, inputType = 'text' }) {
   return new Promise(resolve => {
     const d = $('#dlg'), f = $('#dlgForm');
     f.innerHTML = `<h3>${esc(title)}</h3>${body ? `<p>${body}</p>` : ''}
-      ${input !== null ? `<div class="field"><input type="text" id="dlgIn" value="${esc(input)}" autocomplete="off"></div>` : ''}
+      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${inputType === 'password' ? ' inputmode="numeric" style="text-align:center;letter-spacing:.3em;font-size:20px"' : ''}></div>` : ''}
       <div class="btnrow"><button class="btn ghost" value="cancel" type="submit">${esc(cancel)}</button>
       <button class="btn${danger ? ' danger' : ''}" value="ok" type="submit">${esc(ok)}</button></div>`;
     const done = () => {
@@ -992,6 +1075,90 @@ function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = f
   });
 }
 const confirmDlg = (title, body, ok = 'Remove') => dialog({ title, body, ok, danger: true });
+
+/* Shows the lock screen and resolves once the PIN decrypts the blob. */
+function unlockScreen(blob) {
+  return new Promise(resolve => {
+    const wrap = $('#lock'), form = $('#lockForm'), input = $('#pinIn'), err = $('#lockErr'), go = $('#lockGo');
+    document.body.classList.add('locked');
+    wrap.hidden = false;
+    $('#lockTitle').textContent = document.title;
+    let attempts = 0, busy = false;
+    setTimeout(() => input.focus(), 50);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      if (busy) return;
+      const pin = input.value;
+      if (!pin) { input.focus(); return; }
+      busy = true; go.disabled = true; err.textContent = ''; go.textContent = 'Unlocking…';
+      try {
+        const opened = await openBlob(blob, pin);
+        const data = JSON.parse(opened.text);
+        if (!data || !data.pay || !data.money) throw new Error('not the app\u2019s data');
+        cryptoKey = opened.key; cryptoSalt = opened.salt;
+        S = data;
+        wrap.hidden = true; document.body.classList.remove('locked');
+        form.onsubmit = null;
+        resolve();
+      } catch (e2) {
+        attempts++;
+        err.textContent = attempts > 2 ? `That PIN didn\u2019t work (${attempts} tries)` : 'That PIN didn\u2019t work';
+        input.value = ''; input.focus();
+        // slow repeated guesses down a little; PBKDF2 already makes each one cost
+        await new Promise(r => setTimeout(r, Math.min(attempts * 400, 3000)));
+      } finally { busy = false; go.disabled = false; go.textContent = 'Unlock'; }
+    };
+  });
+}
+
+/* ---------------- turning the PIN on, changing it, turning it off ---------------- */
+async function askPin(title, body, ok) {
+  const v = await dialog({ title, body, ok: ok || 'Continue', input: '', inputType: 'password' });
+  return v === null ? null : String(v).trim();
+}
+async function setPin() {
+  if (!CRYPTO_OK) { toast('This browser cannot encrypt'); return; }
+  const ready = await dialog({
+    title: 'Before you set a PIN',
+    body: 'The data on this device gets encrypted with it. <b>If you forget the PIN it cannot be recovered</b> — not by us, not by anyone. Download a backup first and keep it somewhere safe.',
+    ok: 'Download a backup', cancel: 'Cancel'
+  });
+  if (!ready) return;
+  exportBackup();
+  const one = await askPin('Choose a PIN', 'Six digits or more. Longer is harder to guess — a word or phrase works too.', 'Next');
+  if (one === null) return;
+  if (one.length < 6) { toast('Use at least 6 characters'); return; }
+  const two = await askPin('Type it again', 'Just to be sure you have it right.', 'Turn on PIN lock');
+  if (two === null) return;
+  if (one !== two) { toast("Those didn't match — nothing changed"); return; }
+  cryptoSalt = crypto.getRandomValues(new Uint8Array(16));
+  cryptoKey = await deriveKey(one, cryptoSalt);
+  await save();
+  render();
+  toast('PIN lock on');
+}
+async function changePin() {
+  const one = await askPin('New PIN', 'Six digits or more.', 'Next');
+  if (one === null) return;
+  if (one.length < 6) { toast('Use at least 6 characters'); return; }
+  const two = await askPin('Type it again', '', 'Change PIN');
+  if (two === null) return;
+  if (one !== two) { toast("Those didn't match — nothing changed"); return; }
+  cryptoSalt = crypto.getRandomValues(new Uint8Array(16));
+  cryptoKey = await deriveKey(one, cryptoSalt);
+  await save();
+  toast('PIN changed');
+}
+async function clearPin() {
+  const yes = await dialog({ title: 'Turn off the PIN lock?',
+    body: 'Your figures go back to being stored unencrypted on this device, readable by anyone who can unlock the phone.',
+    ok: 'Turn it off', danger: true });
+  if (!yes) return;
+  cryptoKey = null; cryptoSalt = null;
+  await save();
+  render();
+  toast('PIN lock off');
+}
 
 /* ---------- small html helpers ---------- */
 const tile = (cls, cap, val, sub, sm) => `<div class="tile ${cls}"><div class="cap">${esc(cap)}</div><div><div class="val${sm ? ' sm' : ''}">${val}</div><div class="tsub">${sub || ''}</div></div></div>`;
@@ -1329,6 +1496,13 @@ function nextMonthKey() {
 }
 function backupCard(heading, note) {
   return `<div class="card"><h2>${esc(heading)}</h2>
+    ${CRYPTO_OK ? `<div class="row"><div class="l"><b>PIN lock</b><small>${pinIsSet()
+      ? 'On — everything on this device is encrypted, and the PIN is needed to open the app.'
+      : 'Off — anyone who can unlock this phone can read your figures.'}</small></div>
+      <div class="btnrow" style="margin:0;justify-content:flex-end">${pinIsSet()
+        ? '<button class="btn ghost sm" data-act="changePin">Change</button><button class="btn danger sm" data-act="clearPin">Turn off</button>'
+        : '<button class="btn sm" data-act="setPin">Set a PIN</button>'}</div></div>
+    ${pinIsSet() ? '<div class="note">A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.</div>' : ''}` : ''}
     <div class="muted">${storageOK ? 'Changes save automatically on this device.' : 'Not saving on this device.'} A backup is a small file you can restore on any phone or after a reset.</div>
     <div class="btnrow"><button class="btn" data-act="export">Download backup</button><button class="btn ghost" data-act="copy">Copy backup</button>
       <button class="btn ghost" data-act="import">Restore backup</button>
@@ -1484,6 +1658,7 @@ function parseInput(el) {
 document.addEventListener('click', async e => {
   const t = e.target.closest('[data-act]'); if (!t) return;
   const a = t.dataset.act, d = t.dataset;
+  if (!S && a !== 'forgotPin') return;                 // still locked; nothing to act on
   if (a === 'tab') { tab = d.tab; render(false); return; }
   if (a === 'theme') { cycleTheme(); return; }
   if (a === 'pick') { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; render(false); return; }
@@ -1526,6 +1701,18 @@ document.addEventListener('click', async e => {
     S.games.push({ id: uid(), game: n, date: $('#g_date').value || null, notes: $('#g_notes').value.trim() }); commit(); toast('Added to log'); return; }
   if (a === 'delGame') { const g = S.games.find(x => x.id === d.id);
     if (await confirmDlg('Remove from the log?', esc(g ? g.game : ''))) { S.games = S.games.filter(x => x.id !== d.id); commit(); } return; }
+  if (a === 'setPin') { setPin(); return; }
+  if (a === 'changePin') { changePin(); return; }
+  if (a === 'clearPin') { clearPin(); return; }
+  if (a === 'forgotPin') {
+    const yes = await dialog({ title: 'There is no way back in',
+      body: 'The figures on this device are encrypted with your PIN and cannot be recovered without it. You can clear this device and restore a backup instead — everything in the backup comes back.',
+      ok: 'Clear and start again', danger: true });
+    if (!yes) return;
+    try { localStorage.removeItem(KEY); } catch (e) { }
+    location.reload();
+    return;
+  }
   if (a === 'import') { $('#importFile').click(); return; }
   if (a === 'export') { exportBackup(); return; }
   if (a === 'copy') { (navigator.clipboard ? navigator.clipboard.writeText(JSON.stringify(S)) : Promise.reject()).then(() => toast('Backup copied — paste it somewhere safe'), () => toast('Copy not available here')); return; }
@@ -1552,9 +1739,16 @@ addEventListener('scroll', () => { $('#hdr').classList.toggle('stuck', window.sc
 let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawChart, 150); });
 /* Left open overnight, or resumed from the background, the figures would still
    be yesterday's. Redraw whenever the day actually turns over. */
-let lastDay = C.today();
-function dayWatch() { const d = C.today(); if (d !== lastDay) { lastDay = d; render(); } }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) dayWatch(); });
+let lastDay = null;
+function dayWatch() { if (!S) return; const d = C.today(); if (d !== lastDay) { lastDay = d; render(); } }
+const AUTOLOCK_MS = 5 * 60 * 1000;
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  // away long enough with a PIN set: reload so the lock screen comes back
+  if (pinIsSet() && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) { location.reload(); return; }
+  dayWatch();
+});
 addEventListener('focus', dayWatch);
 setInterval(dayWatch, 60000);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (theme === 'auto') { applyTheme(); drawChart(); } });
@@ -1607,13 +1801,33 @@ function importBackup(file) {
 }
 
 /* ---------- boot ---------- */
-try { const t = localStorage.getItem(THEME_KEY); if (t === 'light' || t === 'dark' || t === 'auto') theme = t; } catch (e) { }
-applyTheme();
-buildTabs();
-S = load(); normalize(); save();
-if (PAY_ONLY) { tab = 'pay'; $('#tabs').style.display = 'none'; document.body.classList.add('notabs'); }
-render(false);
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => { });
+(async function boot() {
+  try { const t = localStorage.getItem(THEME_KEY); if (t === 'light' || t === 'dark' || t === 'auto') theme = t; } catch (e) { }
+  applyTheme();
+  buildTabs();
+  storageOK = probeStorage();
+  let raw = null;
+  if (storageOK) { try { raw = localStorage.getItem(KEY); } catch (e) { } }
+  const blob = encBlob(raw);
+  if (blob) {
+    if (!CRYPTO_OK) {                                  // encrypted, but this browser cannot decrypt
+      document.body.classList.add('locked');
+      $('#lock').hidden = false;
+      $('#lockHint').textContent = 'This browser cannot decrypt the saved data. Open the app over https, or restore a backup.';
+      $('#pinIn').hidden = true; $('#lockGo').hidden = true;
+      return;
+    }
+    await unlockScreen(blob);                          // resolves once the PIN opens it
+  } else {
+    S = load();
+  }
+  normalize();
+  save();
+  if (PAY_ONLY) { tab = 'pay'; $('#tabs').style.display = 'none'; document.body.classList.add('notabs'); }
+  lastDay = C.today();
+  render(false);
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => { });
+})();
 </script>
 </body>
 </html>
