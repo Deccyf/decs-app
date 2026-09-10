@@ -278,3 +278,43 @@ test('formatting', () => {
   assert.equal(C.ord(21), '21st');
   assert.equal(C.ord(31), '31st');
 });
+
+/* ---------------------------------------------------------- price history -- */
+test('a bill kept as history chains back into a price trajectory', () => {
+  const h = C.priceHistory([
+    { name: 'Octopus Energy', category: 'Utilities', amount: 82, started: '2025-01', ended: '2025-09' },
+    { name: 'Octopus Energy', category: 'Utilities', amount: 96, started: '2025-10', ended: '2026-02' },
+    { name: 'Octopus Energy', category: 'Utilities', amount: 110, started: '2026-03' },
+    { name: 'Rent', category: 'Housing', amount: 780, started: '2024-01' }
+  ]);
+  assert.equal(h.length, 1, 'Rent never changed, so it is not listed');
+  assert.equal(h[0].name, 'Octopus Energy');
+  assert.equal(h[0].first, 82);
+  assert.equal(h[0].current, 110);
+  assert.equal(h[0].total, 28);
+  assert.deepEqual(h[0].changes.map(c => [c.month, c.diff]), [['2025-10', 14], ['2026-03', 14]]);
+  assert.equal(h[0].last.month, '2026-03');
+});
+
+test('price history ignores what it cannot read a price from', () => {
+  assert.deepEqual(C.priceHistory([
+    { name: 'Loans', link: 'Short-term', started: '2025-01' },
+    { name: 'Loans', link: 'Short-term', started: '2026-01' }
+  ]), [], 'linked bills follow the debts, not a price');
+  assert.deepEqual(C.priceHistory([
+    { name: 'Gym', amount: 30, started: '2025-01', ended: '2025-06' },
+    { name: 'Gym', amount: 30, started: '2025-07' }
+  ]), [], 'same amount twice is not a change');
+  assert.deepEqual(C.priceHistory([{ name: 'Rent', amount: 780, started: '2024-01' }]), [], 'one row is no history');
+  assert.deepEqual(C.priceHistory([{ name: '', amount: 10, started: '2025-01' }, { name: '', amount: 12, started: '2025-02' }]), [],
+    'unnamed rows are not chained together');
+});
+
+test('a price drop is reported as a drop', () => {
+  const h = C.priceHistory([
+    { name: 'Car insurance', amount: 74, started: '2025-01', ended: '2025-12' },
+    { name: 'Car insurance', amount: 62, started: '2026-01' }
+  ]);
+  assert.equal(h[0].total, -12);
+  assert.ok(h[0].last.pct < 0);
+});

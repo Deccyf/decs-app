@@ -795,6 +795,37 @@ const C = (() => {
     return out;
   }
 
+  /* ---------- bill price history ----------
+     Keeping history means one bill is several rows: the old amount with an
+     "ended" month, then a new row starting the month after. Chain those rows
+     back together by name to see what a bill has actually done over time. */
+  function priceHistory(bills) {
+    const byName = {};
+    (bills || []).forEach(b => {
+      if (b.link) return;                          // linked bills track the debts, not a price
+      const k = String(b.name || '').trim().toLowerCase();
+      if (!k || !b.started) return;
+      (byName[k] = byName[k] || []).push(b);
+    });
+    const out = [];
+    Object.values(byName).forEach(list => {
+      if (list.length < 2) return;
+      const rows = list.slice().sort((a, b) => String(a.started).localeCompare(String(b.started)));
+      const changes = [];
+      for (let i = 1; i < rows.length; i++) {
+        const from = num(rows[i - 1].amount), to = num(rows[i].amount);
+        if (!from || !to || r2(from) === r2(to)) continue;
+        changes.push({ month: rows[i].started, from, to, diff: r2(to - from), pct: (to - from) / from });
+      }
+      if (!changes.length) return;
+      const first = num(rows[0].amount), latest = rows[rows.length - 1];
+      out.push({ name: latest.name, category: latest.category, current: num(latest.amount),
+        first, since: rows[0].started, changes, last: changes[changes.length - 1],
+        total: r2(num(latest.amount) - first), rows: rows.length });
+    });
+    return out.sort((a, b) => b.last.month.localeCompare(a.last.month));
+  }
+
   /* ---------- collections & games ---------- */
   function progress(items, pred) { const t = items.length, h = items.filter(pred).length; return { have: h, total: t, pct: t ? h / t : 0 }; }
   function collections(s) {
@@ -818,7 +849,7 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, priceHistory, collections, gamesStats, MON, DOW };
 })();
 
 /* ===== app: state, views, events ===== */
@@ -939,7 +970,9 @@ function cycleTheme() {
 }
 
 /* ---------- dialogs (replaces prompt/confirm, which mobile browsers can block) ---------- */
-function dialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = false, input = null }) {
+let dlgQueue = Promise.resolve();
+function dialog(opts) { return (dlgQueue = dlgQueue.then(() => showDialog(opts), () => showDialog(opts))); }
+function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = false, input = null }) {
   return new Promise(resolve => {
     const d = $('#dlg'), f = $('#dlgForm');
     f.innerHTML = `<h3>${esc(title)}</h3>${body ? `<p>${body}</p>` : ''}
@@ -1217,7 +1250,25 @@ const VIEWS = {
       ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
         return cats.length > 1 ? `<div class="sep"></div><div class="eyebrow">Where it goes each month</div>
           ${cats.map(([k, v]) => `<div class="prow"><span><b>${esc(k)}</b></span><span class="num muted small">${C.gbp(v, 0)} · ${C.pct(v / m.activeTotal)}</span>${bar(v / m.activeTotal, 'teal')}</div>`).join('')}` : ''; })()}
-      <div class="note">The day of the month is what makes the cash flow above work. Use 31 for "last day" — short months fall back to the 28th, 29th or 30th automatically. Price change? Overwrite the amount, or to keep history add a new row with a Started month and set Ended on the old one.</div></div>`;
+      <div class="note">The day of the month is what makes the cash flow above work. Use 31 for "last day" — short months fall back to the 28th, 29th or 30th automatically. Change an amount and the app offers to keep the old price, which is what builds the Price changes card below.</div></div>`;
+
+    /* --- 4b. what bills have done over time --- */
+    const hist = C.priceHistory(S.money.bills);
+    if (hist.length) {
+      const monthly = C.r2(hist.reduce((a, x) => a + x.total, 0));
+      const recent = hist.filter(x => x.last.month >= C.mkey(C.addMonths(C.today(), -12)));
+      h += `<div class="card"><h2>Price changes<span class="hint">${hist.length} bill${hist.length === 1 ? '' : 's'}</span></h2>
+        <div class="row"><div class="l"><b>${monthly >= 0 ? 'More' : 'Less'} than when you started tracking</b><small>across ${hist.length} bill${hist.length === 1 ? '' : 's'} that have changed price</small></div>
+          <div class="num" style="text-align:right"><b class="${monthly > 0 ? 'neg' : 'pos'}" style="font-size:18px">${monthly > 0 ? '+' : ''}${C.gbp(monthly)}</b><div class="muted small">${monthly > 0 ? '+' : ''}${C.gbp(monthly * 12, 0)} a year</div></div></div>
+        ${hist.map(x => `<div class="prow"><div><b>${esc(x.name)}</b>
+            <small class="meta">${C.gbp(x.first)} ${esc(C.fmtMs(x.since))} → ${C.gbp(x.current)} now${x.changes.length > 1 ? ` · ${x.changes.length} changes` : ''}</small></div>
+          <div class="num" style="text-align:right"><b class="${x.total > 0 ? 'neg' : 'pos'}">${x.total > 0 ? '+' : ''}${C.gbp(x.total)}</b>
+            <div class="muted small">${esc(C.fmtMs(x.last.month))} ${x.last.diff > 0 ? '+' : ''}${C.gbp(x.last.diff)}</div></div>
+          <div class="pb">${(() => { const w = hist.reduce((m, y) => Math.max(m, Math.abs(y.total)), 0) || 1;
+            return bar(Math.abs(x.total) / w, x.total > 0 ? 'coral' : 'teal'); })()}</div></div>`).join('')}
+        ${recent.length ? `<div class="note">${recent.length === 1 ? 'One bill has' : recent.length + ' bills have'} changed in the last year: ${esc(recent.map(x => x.name).join(', '))}.</div>` : ''}
+        <div class="note">Built from the history you keep when a price changes. Edit a bill's amount and the app offers to keep the old one — that is what fills this in.</div></div>`;
+    }
 
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>
@@ -1486,6 +1537,8 @@ document.addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'importFile') { if (el.files[0]) importBackup(el.files[0]); el.value = ''; return; }
   if (el.dataset.hours) { const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.num(el.value)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit(); return; }
+  const amt = el.dataset.set && el.dataset.set.match(/^money\.bills\.(\d+)\.amount$/);
+  if (amt) { billAmountChanged(+amt[1], parseInput(el)); return; }
   if (el.dataset.set) {
     setPath(S, el.dataset.set, parseInput(el));
     if (el.dataset.set === 'money.balance') S.money.balanceOn = C.today();   // stamp it so a stale figure is obvious
@@ -1505,6 +1558,34 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) dayW
 addEventListener('focus', dayWatch);
 setInterval(dayWatch, 60000);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (theme === 'auto') { applyTheme(); drawChart(); } });
+
+/* A bill's price changing is worth recording, not overwriting — that is the
+   only way the app can ever tell you what a bill has done over time. Offer the
+   split rather than doing it silently, since sometimes you are just fixing a typo. */
+async function billAmountChanged(i, next) {
+  const b = S.money.bills[i];
+  if (!b) return;
+  const prev = C.num(b.amount), thisMonth = C.mkey(C.today());
+  const worthKeeping = prev && next !== null && C.r2(next) !== C.r2(prev)
+    && b.started && b.started < thisMonth && !b.ended && !b.link;
+  if (!worthKeeping) { b.amount = next; commit(); return; }
+  const up = next > prev, diff = Math.abs(C.r2(next - prev));
+  const keep = await dialog({
+    title: `${b.name || 'That bill'} ${up ? 'has gone up' : 'has come down'}`,
+    body: `${C.gbp(prev)} → ${C.gbp(next)} a month — ${up ? 'up' : 'down'} ${C.gbp(diff)}, or ${C.gbp(diff * 12, 0)} a year.`,
+    ok: 'Keep the old price', cancel: 'Just change it'
+  });
+  // another change event may have handled this bill while the prompt was open
+  if (S.money.bills[i] !== b || C.r2(C.num(b.amount)) !== C.r2(prev) || b.ended) return;
+  if (keep) {
+    b.ended = C.mkey(C.addMonths(thisMonth + '-01', -1));
+    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: null });
+    toast(`Old price kept until ${C.fmtM(b.ended)}`);
+  } else {
+    b.amount = next;
+  }
+  commit();
+}
 
 /* ---------- backup ---------- */
 function exportBackup() {

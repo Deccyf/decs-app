@@ -144,3 +144,77 @@ test('the day turning over redraws the figures', skip, async t => {
   await page.waitForTimeout(400);
   assert.match(await page.$eval('.results .r', e => e.textContent), /Estimated balance today.*£832/);
 });
+
+test('changing a bill amount offers to keep the old price', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  const page = await open(t, { data, tab: 'money' });
+  await page.click('[data-act="toggle"][data-key="editBills"]');
+  await page.waitForTimeout(250);
+  await page.fill('[data-set="money.bills.2.amount"]', '110');            // Energy 96 -> 110
+  await page.dispatchEvent('[data-set="money.bills.2.amount"]', 'change');
+  await page.waitForTimeout(300);
+  assert.ok(await page.evaluate(() => document.getElementById('dlg').open), 'it asks first');
+  assert.match(await page.$eval('#dlgForm p', e => e.textContent), /£96\.00 → £110\.00.*£168 a year/);
+  await page.click('#dlgForm button[value="ok"]');                        // keep the old price
+  await page.waitForTimeout(350);
+  const bills = await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.bills);
+  const energy = bills.filter(b => b.name === 'Energy');
+  assert.equal(energy.length, 2, 'split into two rows');
+  assert.equal(energy[0].amount, 96);
+  assert.equal(energy[0].ended, '2026-08', 'old row ends the month before');
+  assert.equal(energy[1].amount, 110);
+  assert.equal(energy[1].started, '2026-09');
+  assert.ok(await page.$eval('#view', e => /Price changes/.test(e.textContent)), 'and the card appears');
+});
+
+test('declining the offer just changes the amount', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  await page.click('[data-act="toggle"][data-key="editBills"]');
+  await page.waitForTimeout(250);
+  await page.fill('[data-set="money.bills.2.amount"]', '99');
+  await page.dispatchEvent('[data-set="money.bills.2.amount"]', 'change');
+  await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="cancel"]');
+  await page.waitForTimeout(300);
+  const bills = await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.bills);
+  assert.equal(bills.filter(b => b.name === 'Energy').length, 1, 'still one row');
+  assert.equal(bills.find(b => b.name === 'Energy').amount, 99);
+});
+
+test('a brand new bill does not trigger the history prompt', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills.push({ id: 'n', name: 'New', category: 'Other', amount: 10, dueDay: 5, started: '2026-09' });
+  const page = await open(t, { data, tab: 'money' });
+  await page.click('[data-act="toggle"][data-key="editBills"]');
+  await page.waitForTimeout(250);
+  await page.fill('[data-set="money.bills.3.amount"]', '12');
+  await page.dispatchEvent('[data-set="money.bills.3.amount"]', 'change');
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => document.getElementById('dlg').open), false, 'nothing to keep — started this month');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.bills[3].amount), 12);
+});
+
+test('a repeated change event cannot split the same bill twice', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  await page.click('[data-act="toggle"][data-key="editBills"]');
+  await page.waitForTimeout(250);
+  // fire change twice in a row, as a stray blur or a double-commit would
+  await page.evaluate(() => {
+    const el = document.querySelector('[data-set="money.bills.2.amount"]');
+    el.value = '110';
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(300);
+  if (await page.evaluate(() => document.getElementById('dlg').open)) {
+    await page.click('#dlgForm button[value="ok"]');   // answer the queued second prompt too
+    await page.waitForTimeout(300);
+  }
+  const energy = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('decs-stuff-v1')).money.bills.filter(b => b.name === 'Energy'));
+  assert.equal(energy.length, 2, 'still exactly two rows');
+  assert.deepEqual(energy.map(b => [b.amount, b.started, b.ended]),
+    [[96, '2024-01', '2026-08'], [110, '2026-09', null]]);
+});
