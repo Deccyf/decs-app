@@ -336,3 +336,56 @@ test('mismatched confirmation leaves the PIN off', skip, async t => {
   assert.match(await page.$eval('#toast', e => e.textContent), /didn't match/);
   assert.ok(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).money, 'nothing encrypted');
 });
+
+test('the PIN itself is never written to the device', skip, async t => {
+  const PIN = '4829137';
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, PIN);
+
+  // sweep every place a browser can persist something
+  const stored = await page.evaluate(async () => {
+    const dump = { local: {}, session: {}, cookie: document.cookie, idb: [] };
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); dump.local[k] = localStorage.getItem(k); }
+    for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); dump.session[k] = sessionStorage.getItem(k); }
+    if (indexedDB.databases) { try { dump.idb = (await indexedDB.databases()).map(d => d.name); } catch (e) { } }
+    return dump;
+  });
+  const haystack = JSON.stringify(stored);
+  assert.ok(!haystack.includes(PIN), 'the PIN does not appear in localStorage, sessionStorage or cookies');
+  assert.deepEqual(stored.idb, [], 'nothing squirrelled away in IndexedDB');
+  // the only keys the app ever writes are the data blob and (once changed) the theme
+  assert.deepEqual(Object.keys(stored.local).filter(k => k !== 'decs-stuff-v1:theme'), ['decs-stuff-v1'],
+    'nothing is kept beyond the encrypted data and the theme');
+
+  // what IS kept is a random salt and ciphertext — needed to re-derive, useless alone
+  const blob = JSON.parse(stored.local['decs-stuff-v1']);
+  assert.deepEqual(Object.keys(blob).sort(), ['ct', 'decsEnc', 'iters', 'iv', 'salt']);
+  assert.ok(blob.salt.length >= 20 && blob.iv.length >= 12, 'a real salt and iv');
+
+  // and the derived key is non-extractable, so script cannot read it back out either
+  assert.equal(await page.evaluate(async () => {
+    try { await crypto.subtle.exportKey('raw', cryptoKey); return 'EXPORTED'; } catch (e) { return 'refused'; }
+  }), 'refused');
+
+  // a reload wipes the in-memory key: it has to be typed again
+  await page.reload();
+  await page.waitForSelector('#lock:not([hidden])', { timeout: 5000 });
+  assert.equal(await page.evaluate(() => cryptoKey), null, 'no key survives a reload');
+});
+
+test('the PIN is set once, not re-configured each time', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, '482913');
+  for (let i = 0; i < 3; i++) {                       // open the app three times over
+    await page.reload();
+    await page.waitForSelector('#lock:not([hidden])', { timeout: 5000 });
+    await page.fill('#pinIn', '482913');
+    await page.click('#lockGo');
+    await page.waitForSelector('#view .card', { timeout: 8000 });
+    assert.match(await page.$eval('#view', e => e.textContent), /PIN lock/);
+  }
+  // still the same PIN, never re-set
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).decsEnc, 1);
+});
