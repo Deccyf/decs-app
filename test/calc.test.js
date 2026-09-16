@@ -457,34 +457,14 @@ test('a card balance typed as a negative still means what is owed', () => {
   assert.equal(C.runway(Object.assign(amexMoney(0, true), { amex: -900 }), amexPay, OPT, '2026-09-16').amexNow, 900);
 });
 
-test('the balance promised after pay is the balance you get the next day', () => {
-  const m = Object.assign(bills(
-    { id: '1', name: 'Council Tax', amount: 120.50, dueDay: 20, started: '2024-01' },
-    { id: '2', name: 'Energy', amount: 100, dueDay: 23, started: '2024-01' }
-  ), { buffer: 0, overdraft: 1200, balance: -611.26, balanceOn: '2026-09-16', amex: 900, amexBefore: false });
-  const at = d => C.runway(m, C.payCalc(pay(), d), OPT, d);
-
-  const promised = at('2026-09-16').afterPay;          // what the app says you will have
-  const gotIt = at('2026-09-26').start;                 // what it says you have the day after
-  assert.equal(gotIt, promised, 'the card clearing is actually applied, not just announced');
-  assert.equal(at('2026-09-26').amexPaid, 900);
-  assert.equal(at('2026-09-26').paydayPassed, true);
-
-  assert.equal(at('2026-09-25').amexPaid, 0, 'not before pay day');
-  assert.equal(at('2026-09-25').paydayPassed, false);
+test('the projection shows the card coming off without touching stored figures', () => {
+  const m = Object.assign(bills({ id: '1', name: 'A', amount: 120.50, dueDay: 20, started: '2024-01' }),
+    { buffer: 0, overdraft: 1200, balance: -611.26, balanceOn: '2026-09-16', amex: 900, amexBefore: false });
+  const before = C.runway(m, C.payCalc(pay(), '2026-09-16'), OPT, '2026-09-16');
+  const after = C.runway(m, C.payCalc(pay(), '2026-09-26'), OPT, '2026-09-26');
+  assert.equal(before.amexOnPay, 900, 'projected as coming off on pay day');
+  assert.equal(after.paydayPassed, true, 'and once pay day has gone it says so');
+  assert.equal(m.amex, 900, 'but nothing is applied behind your back');
+  assert.equal(m.balance, -611.26);
 });
 
-test('the card is only taken out of the carry once, however stale', () => {
-  const m = Object.assign(bills({ id: '1', name: 'A', amount: 100, dueDay: 20, started: '2024-01' }),
-    { buffer: 0, balance: 5000, balanceOn: '2026-09-16', amex: 900, amexBefore: false });
-  const far = C.runway(m, C.payCalc(pay(), '2026-12-01'), OPT, '2026-12-01');
-  assert.ok(far.carriedPays.length > 1, 'several pay days have gone by');
-  assert.equal(far.amexPaid, 900, 'still counted once — only one card balance is known');
-  assert.equal(far.paydayPassed, true, 'and it asks for a fresh figure instead of guessing');
-});
-
-test('no card balance means nothing to clear', () => {
-  const m = Object.assign(bills({ id: '1', name: 'A', amount: 100, dueDay: 20, started: '2024-01' }),
-    { buffer: 0, balance: 500, balanceOn: '2026-09-16', amex: 0, amexBefore: false });
-  assert.equal(C.runway(m, C.payCalc(pay(), '2026-09-26'), OPT, '2026-09-26').amexPaid, 0);
-});

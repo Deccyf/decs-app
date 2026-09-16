@@ -494,20 +494,73 @@ test('the AMEX tick moves when the card bites, not whether it is paid', skip, as
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.amexBefore), true);
 });
 
-test('after pay day the app asks for fresh figures and shows the clearing', skip, async t => {
+test('after pay day it prompts, and points at the button rather than guessing', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
   Object.assign(data.money, { balance: -611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 1200,
-    amex: 900, amexBefore: false });
+    amex: 900, amexBefore: false, amexUndo: null });
   data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 20, started: '2024-01' }];
 
   const before = await open(t, { on: '2026-09-16', data, tab: 'money' });
-  const promised = (await before.$$eval('.results .r', rs => rs.map(r => r.textContent)))
-    .find(r => r.startsWith('Balance after pay')).replace('Balance after pay', '');
+  assert.ok((await before.$$eval('.results .r', rs => rs.map(r => r.textContent)))
+    .some(r => /AMEX cleared on pay day/.test(r)), 'the projection shows it coming off');
 
   const after = await open(t, { on: '2026-09-26', data, tab: 'money' });
-  const now = (await after.$$eval('.results .r', rs => rs.map(r => r.textContent)))[0];
-  assert.ok(now.includes(promised.trim()), `the day after pay day shows ${promised.trim()}, as promised`);
-  assert.match(await after.$eval('.card .note', e => e.textContent.replace(/\s+/g, ' ')), /clearing the card/);
   assert.match(await after.$$eval('.banner', bs => bs.map(b => b.textContent.replace(/\s+/g, ' ')).join(' | ')),
-    /Pay day has been since you typed this.*check your bank and card/);
+    /Pay day has been since you typed this.*button for it under American Express/);
+  const m = await after.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money);
+  assert.equal(m.amex, 900, 'nothing applied on its own');
+  assert.equal(m.balance, -611.26);
+  assert.equal(await after.$$eval('[data-act="amexClear"]', e => e.length), 1, 'the button is there to press');
+});
+
+test('clearing the card is a button, and it undoes cleanly', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: -611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 1200,
+    amex: 900, amexBefore: false, amexUndo: null });
+  data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 20, started: '2024-01' }];
+  const page = await open(t, { on: '2026-09-20', data, tab: 'money' });
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money);
+
+  // nothing happens on its own
+  let m = await stored();
+  assert.equal(m.amex, 900, 'still outstanding');
+  assert.equal(m.balance, -611.26, 'balance untouched');
+  assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0, 'no undo offered yet');
+
+  await page.click('[data-act="amexClear"]');
+  await page.waitForTimeout(400);
+  m = await stored();
+  assert.equal(m.amex, 0, 'card zeroed');
+  assert.equal(m.balance, -1511.26, '£900 off the balance');
+  assert.equal(m.balanceOn, '2026-09-20', 're-anchored to today');
+  assert.ok(m.amexUndo, 'and the snapshot is kept');
+  assert.equal(await page.$$eval('[data-act="amexClear"]', e => e.length), 0, 'nothing left to clear');
+
+  await page.click('[data-act="amexUndo"]');
+  await page.waitForTimeout(400);
+  m = await stored();
+  assert.equal(m.amex, 900, 'card balance back');
+  assert.equal(m.balance, -611.26, 'balance back');
+  assert.equal(m.balanceOn, '2026-09-16', 'and the original anchor date too');
+  assert.equal(m.amexUndo, null, 'snapshot spent');
+  assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0);
+});
+
+test('editing a figure by hand retires the undo rather than clobbering it', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: -611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 0,
+    amex: 900, amexBefore: false, amexUndo: null });
+  data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 20, started: '2024-01' }];
+  const page = await open(t, { on: '2026-09-20', data, tab: 'money' });
+  await page.click('[data-act="amexClear"]');
+  await page.waitForTimeout(400);
+  assert.ok(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.amexUndo));
+
+  await page.fill('[data-set="money.balance"]', '-1450');
+  await page.dispatchEvent('[data-set="money.balance"]', 'change');
+  await page.waitForTimeout(400);
+  const m = await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money);
+  assert.equal(m.amexUndo, null, 'undo retired once you type a newer balance');
+  assert.equal(m.balance, -1450, 'and your figure stands');
+  assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0, 'button gone');
 });
