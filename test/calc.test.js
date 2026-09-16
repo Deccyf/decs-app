@@ -412,3 +412,47 @@ test('the overdraft is read as a limit however it is typed', () => {
     'a limit typed as a negative still means the same limit');
   assert.equal(C.runway(Object.assign(odMoney(0), { overdraft: null }), odPay, OPT, '2026-09-16').overdraft, 0);
 });
+
+/* ------------------------------------------------------------------ AMEX -- */
+const amexMoney = (amex, amexBefore) => Object.assign(bills(
+  { id: '1', name: 'A', amount: 120.50, dueDay: 20, started: '2024-01' },
+  { id: '2', name: 'B', amount: 100, dueDay: 23, started: '2024-01' }
+), { buffer: 0, overdraft: 1200, balance: -611.26, balanceOn: '2026-09-16', amex, amexBefore });
+const amexPay = { nextPayDay: '2026-09-25', nextIdx: 0, rows: [{ payday: '2026-09-25', net: 3455.34 }] };
+const amexRun = (amex, before) => C.runway(amexMoney(amex, before), amexPay, OPT, '2026-09-16');
+
+test('a card balance cleared on pay day leaves the pre-pay-day figures alone', () => {
+  const without = amexRun(0, false), onPayDay = amexRun(900, false);
+  assert.equal(onPayDay.safe, without.safe, 'what is free before pay day is unchanged');
+  assert.equal(onPayDay.atPayday, without.atPayday);
+  assert.equal(onPayDay.low.bal, without.low.bal, 'and it does not deepen the dip');
+  assert.equal(onPayDay.afterPay, C.r2(without.afterPay - 900), 'but it does come off when pay lands');
+  assert.equal(onPayDay.amexOnPay, 900);
+  assert.equal(onPayDay.amexNow, 0);
+});
+
+test('ticking it takes the card off before pay day instead', () => {
+  const before = amexRun(900, true);
+  assert.equal(before.amexNow, 900);
+  assert.equal(before.amexOnPay, 0);
+  assert.equal(before.safe, -531.76, 'it eats into what is free now');
+  assert.equal(before.atPayday, -1731.76);
+  assert.equal(before.shortfall, true, 'and here it pushes past the overdraft limit');
+});
+
+test('the card gets paid either way — only the timing moves', () => {
+  assert.equal(amexRun(900, false).afterPay, amexRun(900, true).afterPay,
+    'balance after pay is the same whichever way the tick is set');
+  assert.equal(amexRun(900, false).afterPay, 1723.58);
+});
+
+test('no card balance changes nothing', () => {
+  const none = amexRun(0, false), zeroTicked = amexRun(0, true);
+  assert.equal(none.afterPay, zeroTicked.afterPay);
+  assert.equal(none.amex, 0);
+  assert.equal(none.safe, zeroTicked.safe);
+});
+
+test('a card balance typed as a negative still means what is owed', () => {
+  assert.equal(C.runway(Object.assign(amexMoney(0, true), { amex: -900 }), amexPay, OPT, '2026-09-16').amexNow, 900);
+});

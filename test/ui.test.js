@@ -463,3 +463,33 @@ test('the overdraft shows as a floor on the chart and changes what is free', ski
   });
   for (const y of geom.ys) assert.ok(y >= 0 && y <= geom.h, `limit line at y=${y} is inside the box`);
 });
+
+test('the AMEX tick moves when the card bites, not whether it is paid', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: -611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 1200,
+    amex: null, amexBefore: false });
+  data.money.bills = [
+    { id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 20, started: '2024-01' },
+    { id: '2', name: 'B', category: 'Other', amount: 100, dueDay: 23, started: '2024-01' }
+  ];
+  const page = await open(t, { on: '2026-09-16', data, tab: 'money' });
+  const rows = () => page.$$eval('.results .r', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+  const free = () => page.$eval('.flowhero .amt', e => e.textContent);
+  const afterPay = async () => (await rows()).find(r => r.startsWith('Balance after pay'));
+
+  await page.fill('[data-set="money.amex"]', '900');
+  await page.dispatchEvent('[data-set="money.amex"]', 'change');
+  await page.waitForTimeout(400);
+  assert.match(await free(), /£368\.24/, 'unticked: what is free before pay day is untouched');
+  assert.ok((await rows()).some(r => /AMEX cleared on pay day.*-£900/.test(r)), 'it is shown coming off on pay day');
+  assert.match(await page.$eval('[data-set="money.amex"]', e => e.value), /900/);
+  const afterUnticked = await afterPay();
+
+  await page.click('.switch:has(input[data-set="money.amexBefore"])');
+  await page.waitForTimeout(400);
+  assert.match(await free(), /-£531\.76/, 'ticked: it now eats into what is free');
+  assert.equal(await afterPay(), afterUnticked, 'and the card still gets paid — same figure either way');
+  assert.ok((await rows()).some(r => /AMEX balance, taken off now.*-£900/.test(r)));
+  assert.match(await page.$eval('.banner.bad', e => e.textContent.replace(/\s+/g, ' ')), /Past your overdraft limit/);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.amexBefore), true);
+});

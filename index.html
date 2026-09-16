@@ -411,7 +411,7 @@ body.locked header,body.locked main,body.locked .tabs{display:none}
     <button type="button" class="locklink" data-act="forgotPin">Forgotten your PIN?</button>
   </form>
 </div>
-<script id="seed" type="application/json">{"version":2,"generic":true,"name":"Dec","money":{"buffer":1000,"overdraft":0,"balance":null,"balanceOn":null,"dueShift":"next","bankHols":true,"bills":[],"months":[],"debts":[]},"house":[],"classic":[],"mega":[],"psm":[],"games":[],"goals":"","pay":{"salary":null,"hoursWeek":35,"weeksYear":52.1667,"sundayRate":3.7,"nextPayDay":"2026-08-28","periodEndDays":6,"personalAllowance":12570,"taxCode":"1257L","fixed":[],"hours":{},"hpaHistory":{},"tax":{"basicRate":0.2,"basicBand":37700,"higherRate":0.4,"higherBand":125140,"addRate":0.45,"niPT":12570,"niUEL":50270,"niMain":0.08,"niUpper":0.02,"taxYearStart":"2026-04-06"}}}</script>
+<script id="seed" type="application/json">{"version":2,"generic":true,"name":"Dec","money":{"buffer":1000,"overdraft":0,"amex":null,"amexBefore":false,"balance":null,"balanceOn":null,"dueShift":"next","bankHols":true,"bills":[],"months":[],"debts":[]},"house":[],"classic":[],"mega":[],"psm":[],"games":[],"goals":"","pay":{"salary":null,"hoursWeek":35,"weeksYear":52.1667,"sundayRate":3.7,"nextPayDay":"2026-08-28","periodEndDays":6,"personalAllowance":12570,"taxCode":"1257L","fixed":[],"hours":{},"hpaHistory":{},"tax":{"basicRate":0.2,"basicBand":37700,"higherRate":0.4,"higherBand":125140,"addRate":0.45,"niPT":12570,"niUEL":50270,"niMain":0.08,"niUpper":0.02,"taxYearStart":"2026-04-06"}}}</script>
 <script>
 /* ===== calc: pure functions, no DOM ===== */
 const C = (() => {
@@ -787,17 +787,23 @@ const C = (() => {
     const carriedIn = r2(carriedPays.reduce((a, r) => a + num(r.net), 0));
     const start = hasBal ? r2(typed - carriedOut + carriedIn) : null;
     const days = Math.max(daysBetween(tod, to), 0);
+    /* A credit card balance gets paid whichever way the tick is set — it only
+       decides whether it eats into the money before pay day or comes off when
+       pay lands. Either way the balance after pay works out the same. */
+    const amex = Math.abs(num(m.amex));
+    const amexBefore = !!m.amexBefore;
+    const amexNow = amexBefore ? amex : 0, amexOnPay = amexBefore ? 0 : amex;
     // running balance, one point per day, so the dip between bills is visible
     const series = [];
     if (hasBal) {
-      let bal = start, ei = 0;
+      let bal = r2(start - amexNow), ei = 0;
       for (let i = 0; i <= days; i++) {
         const d = addDays(tod, i);
         while (ei < events.length && events[ei].date <= d) bal = r2(bal - events[ei++].amount);
         series.push({ date: d, bal });
       }
     }
-    const atPayday = hasBal ? r2(start - out) : null;
+    const atPayday = hasBal ? r2(start - out - amexNow) : null;
     const buffer = num(m.buffer);
     // an arranged overdraft is real spending room, so the floor is -limit rather
     // than zero; going under zero is worth flagging, going under the limit is the
@@ -814,7 +820,8 @@ const C = (() => {
       safe: hasBal ? r2(atPayday + overdraft - buffer) : null,
       perDay: hasBal && days > 0 ? r2((atPayday + overdraft - buffer) / days) : null,
       net: payRow ? payRow.net : null,
-      afterPay: hasBal && payRow ? r2(atPayday + payRow.net) : null,
+      amex, amexBefore, amexNow, amexOnPay,
+      afterPay: hasBal && payRow ? r2(atPayday + payRow.net - amexOnPay) : null,
       shortfall: hasBal && low ? low.bal < -overdraft : false
     };
   }
@@ -996,6 +1003,8 @@ function normalize() {
   ['bills', 'months', 'debts'].forEach(k => arr(m, k));
   if (m.buffer === undefined) m.buffer = 0;
   if (m.overdraft === undefined) m.overdraft = 0;
+  if (m.amex === undefined) m.amex = null;
+  if (typeof m.amexBefore !== 'boolean') m.amexBefore = false;
   if (m.balance === undefined) m.balance = null;
   if (m.balanceOn === undefined) m.balanceOn = null;
   // a balance carried over from before this feature has no date — treat it as true today
@@ -1377,8 +1386,10 @@ const VIEWS = {
         <div class="results">
           <div class="r"><span>${fl.wasCarried ? 'Estimated balance today' : 'Balance today'}</span><span class="num">${C.gbp(fl.start)}</span></div>
           <div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
+          ${fl.amexNow ? `<div class="r"><span>AMEX balance, taken off now</span><span class="num neg">-${C.gbp(fl.amexNow)}</span></div>` : ''}
           <div class="r"><span>Balance the morning of pay day</span><span class="num">${C.gbp(fl.atPayday)}</span></div>
           ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>
+          ${fl.amexOnPay ? `<div class="r"><span>AMEX cleared on pay day</span><span class="num neg">-${C.gbp(fl.amexOnPay)}</span></div>` : ''}
           <div class="r total"><span>Balance after pay</span><span class="num">${C.gbp(fl.afterPay)}</span></div>` : ''}
         </div>`;
       if (fl.shortfall) h += `<div class="banner bad"><b>${fl.overdraft ? 'Past your overdraft limit.' : 'Short before pay day.'}</b> The balance dips to ${C.gbp(fl.low.bal)} on ${esc(C.fmtD(fl.low.date))}${fl.overdraft ? ` — ${C.gbp(Math.abs(fl.headroom))} beyond your ${C.gbp(fl.overdraft, 0)} limit` : ''} — move something, or the direct debit bounces.</div>`;
@@ -1397,6 +1408,16 @@ const VIEWS = {
       <div class="grid2" style="margin-top:14px">${field(fl.typedOn ? `Balance (${C.fmtDM(fl.typedOn)})` : 'Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}
       ${field('Overdraft limit', inp('money.overdraft', S.money.overdraft, 'number', 'min="0" placeholder="0"'))}
       ${field('Room left at lowest', `<input type="text" value="${fl.hasBal && fl.low ? esc(C.gbp(fl.headroom)) : '–'}" disabled>`)}</div>
+      <div class="sep"></div>
+      <div class="eyebrow">American Express</div>
+      <div class="grid2">${field('Card balance owed', inp('money.amex', S.money.amex, 'number', 'min="0" placeholder="0.00"'))}
+        ${field('When it bites', `<input type="text" value="${fl.amexBefore ? 'before pay day' : 'on pay day'}" disabled>`)}</div>
+      ${toggle('money.amexBefore', S.money.amexBefore, 'Take it off before pay day',
+        "Leave this off if you clear the card on pay day — it still comes off the balance after pay, just not out of what's free before it.")}
+      ${fl.amex ? `<div class="note">${fl.amexBefore
+        ? `The <b>${C.gbp(fl.amex)}</b> is counted against you now, so it is already out of the figure at the top.`
+        : `The <b>${C.gbp(fl.amex)}</b> is left alone until ${esc(C.fmtDM(fl.to))}, then taken off what lands. It is not in the figure at the top.`}</div>` : ''}
+      <div class="sep"></div>
       <div class="note">Your overdraft is the most you can go into minus before a payment bounces — leave it at 0 if you haven't got one. It counts as spendable room, so the figure above is what's free <i>including</i> it.
       Retype the balance whenever you check your bank — the running total restarts from whatever you enter, and bills come off again as the days pass. Overdrawn? Type the amount, then tap <b>+</b> beside it to flip it to <b>−</b>.</div>
       ${fl.staleDays >= 14 ? `<div class="banner" style="margin-top:12px"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
@@ -1406,7 +1427,10 @@ const VIEWS = {
           return fl.events.map(e => { if (bal !== null) bal = C.r2(bal - e.amount); return ledgerRow(e, bal); }).join('')
             + (fl.net != null ? `<div class="lrow pay"><div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>
               <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(fl.to)))}</small></div>
-              <div class="lv pos">+${C.gbp(fl.net)}${fl.hasBal ? `<small>${C.gbp(fl.afterPay)}</small>` : ''}</div></div>` : ''); })()
+              <div class="lv pos">+${C.gbp(fl.net)}${fl.hasBal && !fl.amexOnPay ? `<small>${C.gbp(fl.afterPay)}</small>` : ''}</div></div>
+              ${fl.amexOnPay ? `<div class="lrow"><div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>
+                <div class="ln"><b>AMEX cleared</b><small>card balance</small></div>
+                <div class="lv">-${C.gbp(fl.amexOnPay)}${fl.hasBal ? `<small>${C.gbp(fl.afterPay)}</small>` : ''}</div></div>` : ''}` : ''); })()
       }</div>` : ''}
       <div class="sep"></div>${flowOptions()}</div>`;
 
