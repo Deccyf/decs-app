@@ -506,7 +506,7 @@ test('after pay day it prompts, and points at the button rather than guessing', 
 
   const after = await open(t, { on: '2026-09-26', data, tab: 'money' });
   assert.match(await after.$$eval('.banner', bs => bs.map(b => b.textContent.replace(/\s+/g, ' ')).join(' | ')),
-    /Pay day has been since you typed this.*button for it under American Express/);
+    /Pay day has been since you typed this.*Paid the card\? Press Pay now under American Express/);
   const m = await after.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money);
   assert.equal(m.amex, 900, 'nothing applied on its own');
   assert.equal(m.balance, -611.26);
@@ -563,4 +563,19 @@ test('editing a figure by hand retires the undo rather than clobbering it', skip
   assert.equal(m.amexUndo, null, 'undo retired once you type a newer balance');
   assert.equal(m.balance, -1450, 'and your figure stands');
   assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0, 'button gone');
+});
+
+test('the Pay now button says what it is worth and what it does', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: -611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 1200,
+    amex: 900, amexBefore: false, amexUndo: null });
+  data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 23, started: '2024-01' }];
+  const page = await open(t, { on: '2026-09-20', data, tab: 'money' });
+
+  assert.equal(await page.$eval('[data-act="amexClear"]', e => e.textContent.trim()), 'Pay now');
+  assert.match(await page.$$eval('.card .note', ns => ns.map(n => n.textContent.replace(/\s+/g, ' ')).join(' | ')),
+    /Pay now records that you have paid it — £900\.00 off your balance.*doesn't make the payment/);
+  // the dead "when it bites" box is gone; the toggle already says it
+  assert.equal(await page.$$eval('#view input[disabled]', es => es.filter(e => /pay day/.test(e.value)).length), 0);
+  assert.equal(await page.$$eval('[data-set="money.amexBefore"]', e => e.length), 1, 'the toggle still carries the timing');
 });
