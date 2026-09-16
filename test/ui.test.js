@@ -493,3 +493,21 @@ test('the AMEX tick moves when the card bites, not whether it is paid', skip, as
   assert.match(await page.$eval('.banner.bad', e => e.textContent.replace(/\s+/g, ' ')), /Past your overdraft limit/);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.amexBefore), true);
 });
+
+test('after pay day the app asks for fresh figures and shows the clearing', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: -611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 1200,
+    amex: 900, amexBefore: false });
+  data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 20, started: '2024-01' }];
+
+  const before = await open(t, { on: '2026-09-16', data, tab: 'money' });
+  const promised = (await before.$$eval('.results .r', rs => rs.map(r => r.textContent)))
+    .find(r => r.startsWith('Balance after pay')).replace('Balance after pay', '');
+
+  const after = await open(t, { on: '2026-09-26', data, tab: 'money' });
+  const now = (await after.$$eval('.results .r', rs => rs.map(r => r.textContent)))[0];
+  assert.ok(now.includes(promised.trim()), `the day after pay day shows ${promised.trim()}, as promised`);
+  assert.match(await after.$eval('.card .note', e => e.textContent.replace(/\s+/g, ' ')), /clearing the card/);
+  assert.match(await after.$$eval('.banner', bs => bs.map(b => b.textContent.replace(/\s+/g, ' ')).join(' | ')),
+    /Pay day has been since you typed this.*check your bank and card/);
+});

@@ -785,7 +785,13 @@ const C = (() => {
     const carriedOut = r2(carried.reduce((a, e) => a + e.amount, 0));
     const carriedPays = typedOn ? p.rows.filter(r => r.payday > typedOn && r.payday < tod) : [];
     const carriedIn = r2(carriedPays.reduce((a, r) => a + num(r.net), 0));
-    const start = hasBal ? r2(typed - carriedOut + carriedIn) : null;
+    /* A pay day that has already passed took the card with it. Without this the
+       balance jumped back up by the card's worth the morning after pay day —
+       the app promising a figure and then quietly not applying it. Counted once
+       however many pay days have gone by, since only one card balance is known;
+       the prompt below asks for a fresh one. */
+    const amexPaid = (Math.abs(num(m.amex)) && carriedPays.length) ? Math.abs(num(m.amex)) : 0;
+    const start = hasBal ? r2(typed - carriedOut + carriedIn - amexPaid) : null;
     const days = Math.max(daysBetween(tod, to), 0);
     /* A credit card balance gets paid whichever way the tick is set — it only
        decides whether it eats into the money before pay day or comes off when
@@ -820,7 +826,7 @@ const C = (() => {
       safe: hasBal ? r2(atPayday + overdraft - buffer) : null,
       perDay: hasBal && days > 0 ? r2((atPayday + overdraft - buffer) / days) : null,
       net: payRow ? payRow.net : null,
-      amex, amexBefore, amexNow, amexOnPay,
+      amex, amexBefore, amexNow, amexOnPay, amexPaid, paydayPassed: carriedPays.length > 0,
       afterPay: hasBal && payRow ? r2(atPayday + payRow.net - amexOnPay) : null,
       shortfall: hasBal && low ? low.bal < -overdraft : false
     };
@@ -1400,7 +1406,7 @@ const VIEWS = {
         <div class="results"><div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
         ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>` : ''}</div>`;
     }
-    h += `${fl.wasCarried ? `<div class="note" style="margin-top:2px">Carried forward from the <b>${C.gbp(fl.typed)}</b> you entered on ${esc(C.fmtD(fl.typedOn))}${fl.carriedOut ? `, less <b>${C.gbp(fl.carriedOut)}</b> of bills` : ''}${fl.carriedIn ? `, plus <b>${C.gbp(fl.carriedIn)}</b> of pay` : ''} since.</div>` : ''}
+    h += `${fl.wasCarried ? `<div class="note" style="margin-top:2px">Carried forward from the <b>${C.gbp(fl.typed)}</b> you entered on ${esc(C.fmtD(fl.typedOn))}${fl.carriedOut ? `, less <b>${C.gbp(fl.carriedOut)}</b> of bills` : ''}${fl.carriedIn ? `, plus <b>${C.gbp(fl.carriedIn)}</b> of pay` : ''}${fl.amexPaid ? `, less <b>${C.gbp(fl.amexPaid)}</b> clearing the card` : ''} since.</div>` : ''}
       ${fl.wasCarried ? detailsBlock('carried', `What's come off since ${C.fmtDM(fl.typedOn)}`,
         `<div class="ledger">${fl.carried.map(e => ledgerRow(e, null, true)).join('')}${fl.carriedPays.map(r => `<div class="lrow gone"><div class="ld"><span>${esc(C.DOW[C.dow(r.payday)])}</span>${+r.payday.slice(8)}</div>
           <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(r.payday)))}</small></div><div class="lv pos">+${C.gbp(r.net)}</div></div>`).join('')}</div>
@@ -1420,7 +1426,8 @@ const VIEWS = {
       <div class="sep"></div>
       <div class="note">Your overdraft is the most you can go into minus before a payment bounces — leave it at 0 if you haven't got one. It counts as spendable room, so the figure above is what's free <i>including</i> it.
       Retype the balance whenever you check your bank — the running total restarts from whatever you enter, and bills come off again as the days pass. Overdrawn? Type the amount, then tap <b>+</b> beside it to flip it to <b>−</b>.</div>
-      ${fl.staleDays >= 14 ? `<div class="banner" style="margin-top:12px"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
+      ${fl.paydayPassed ? `<div class="banner" style="margin-top:12px"><b>Pay day has been since you typed this.</b> The figures above are worked forward from ${esc(C.fmtD(fl.typedOn))}${fl.amexPaid ? ', card clearing included' : ''} — check your bank${fl.amex ? ' and card' : ''} and retype ${fl.amex ? 'them' : 'it'}.</div>`
+        : fl.staleDays >= 14 ? `<div class="banner" style="margin-top:12px"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
       ${m.undated ? `<div class="banner" style="margin-top:12px"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} under Bills below.</div>` : ''}
       ${fl.events.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
         (() => { let bal = fl.hasBal ? fl.start : null;
