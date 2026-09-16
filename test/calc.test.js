@@ -364,3 +364,51 @@ test('pay landing today stays in the pay row rather than the carry', () => {
   assert.equal(r.net, 2000);
   assert.equal(r.afterPay, C.r2(r.atPayday + 2000));
 });
+
+/* ------------------------------------------------------------- overdraft -- */
+const odMoney = overdraft => Object.assign(bills(
+  { id: '1', name: 'A', amount: 120.50, dueDay: 20, started: '2024-01' },
+  { id: '2', name: 'B', amount: 100, dueDay: 23, started: '2024-01' }
+), { buffer: 0, overdraft, balance: -611.26, balanceOn: '2026-09-16' });
+const odPay = { nextPayDay: '2026-09-25', nextIdx: 0, rows: [{ payday: '2026-09-25', net: 3455.34 }] };
+const odRun = overdraft => C.runway(odMoney(overdraft), odPay, OPT, '2026-09-16');
+
+test('an arranged overdraft is spendable room', () => {
+  const none = odRun(0), some = odRun(1200);
+  assert.equal(none.safe, -831.76, 'without one there is nothing free');
+  assert.equal(some.safe, 368.24, 'with £1,200 there is £368.24 free');
+  assert.equal(some.atPayday, none.atPayday, 'the projected balance itself is unchanged');
+  assert.equal(some.headroom, 368.24, 'room left at the lowest point');
+});
+
+test('going under zero and going under the limit are different things', () => {
+  const inside = odRun(1200);
+  assert.equal(inside.intoOverdraft, true, 'dips into the overdraft');
+  assert.equal(inside.shortfall, false, 'but does not bounce');
+
+  const past = odRun(500);
+  assert.equal(past.intoOverdraft, false, 'past the limit is not merely "into" it');
+  assert.equal(past.shortfall, true, 'this one bounces');
+  assert.equal(past.headroom, -331.76, 'and by how much');
+
+  const none = odRun(0);
+  assert.equal(none.shortfall, true, 'no overdraft means zero is the floor');
+  assert.equal(none.intoOverdraft, false);
+});
+
+test('a positive balance with an overdraft still reads sensibly', () => {
+  const m = Object.assign(bills({ id: '1', name: 'A', amount: 100, dueDay: 20, started: '2024-01' }),
+    { buffer: 0, overdraft: 1000, balance: 500, balanceOn: '2026-09-16' });
+  const r = C.runway(m, odPay, OPT, '2026-09-16');
+  assert.equal(r.intoOverdraft, false, 'never goes under');
+  assert.equal(r.shortfall, false);
+  assert.equal(r.safe, 1400, '£400 of its own plus £1,000 of overdraft');
+  assert.equal(r.headroom, 1400);
+});
+
+test('the overdraft is read as a limit however it is typed', () => {
+  assert.equal(odRun(1200).overdraft, 1200);
+  assert.equal(C.runway(Object.assign(odMoney(0), { overdraft: -1200 }), odPay, OPT, '2026-09-16').overdraft, 1200,
+    'a limit typed as a negative still means the same limit');
+  assert.equal(C.runway(Object.assign(odMoney(0), { overdraft: null }), odPay, OPT, '2026-09-16').overdraft, 0);
+});

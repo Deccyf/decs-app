@@ -405,3 +405,61 @@ test('the home card totals only the payments it is not showing', skip, async t =
   // three shown (10 + 20 + 30), two not (40 + 50 = 90), 150 altogether
   assert.match(note, /\+ 2 more before pay day — £90\.00 of them, £150\.00 altogether/);
 });
+
+/* ------------------------------------------------------- chart containment -- */
+test('the chart never paints outside its box', skip, async t => {
+  // an all-negative run: the zero line used to be computed ~113px above the svg
+  // and, with overflow:visible, drifted up the page
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.balance = -611.26;
+  data.money.balanceOn = '2026-09-16';
+  data.money.buffer = 0;
+  data.money.bills = [
+    { id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 20, started: '2024-01' },
+    { id: '2', name: 'B', category: 'Other', amount: 100, dueDay: 23, started: '2024-01' }
+  ];
+  const page = await open(t, { on: '2026-09-16', data, tab: 'money' });
+
+  const geom = await page.evaluate(() => {
+    const svg = document.querySelector('.spark');
+    const box = svg.viewBox.baseVal;
+    const ys = [...svg.querySelectorAll('line')].flatMap(l => [+l.getAttribute('y1'), +l.getAttribute('y2')]);
+    return { h: box.height, ys, overflow: getComputedStyle(svg).overflow,
+             svgTop: svg.getBoundingClientRect().top, cardTop: svg.closest('.card').getBoundingClientRect().top };
+  });
+  for (const y of geom.ys) assert.ok(y >= 0 && y <= geom.h, `guide line at y=${y} is inside 0..${geom.h}`);
+  assert.equal(geom.overflow, 'hidden', 'and clipped regardless');
+  assert.ok(geom.svgTop > geom.cardTop, 'the chart sits inside its card, not above it');
+});
+
+test('the overdraft shows as a floor on the chart and changes what is free', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: -611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 0 });
+  data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 120.50, dueDay: 20, started: '2024-01' }];
+  const page = await open(t, { on: '2026-09-16', data, tab: 'money' });
+  assert.match(await page.$eval('.flowhero .amt', e => e.textContent), /-£731\.76/);
+  assert.equal(await page.$$eval('.spark line', e => e.length), 0, 'no guide lines when everything is below zero');
+
+  await page.fill('[data-set="money.overdraft"]', '1200');
+  await page.dispatchEvent('[data-set="money.overdraft"]', 'change');
+  await page.waitForTimeout(400);
+  assert.match(await page.$eval('.flowhero .amt', e => e.textContent), /£468\.24/, 'the overdraft is spendable room');
+  assert.match(await page.$eval('.flowhero .muted', e => e.textContent), /using your £1,200 overdraft/);
+  assert.match(await page.$eval('.banner', e => e.textContent.replace(/\s+/g, ' ')), /Into your overdraft.*of your £1,200 limit still spare/);
+  // £1,200 is a long way below a line that only moves £120, so drawing it would
+  // flatten the chart to nothing — the headroom field carries that number instead
+  assert.equal(await page.$$eval('.spark line', e => e.length), 0, 'a distant limit is not drawn');
+  assert.equal(await page.$eval('[data-set="money.overdraft"]', e => e.value), '1200');
+
+  // bring the limit close and it becomes the line worth watching
+  await page.fill('[data-set="money.overdraft"]', '800');
+  await page.dispatchEvent('[data-set="money.overdraft"]', 'change');
+  await page.waitForTimeout(400);
+  assert.equal(await page.$$eval('.spark line', e => e.length), 1, 'the limit is drawn once it is in reach');
+  const geom = await page.evaluate(() => {
+    const svg = document.querySelector('.spark');
+    return { h: svg.viewBox.baseVal.height,
+      ys: [...svg.querySelectorAll('line')].flatMap(l => [+l.getAttribute('y1'), +l.getAttribute('y2')]) };
+  });
+  for (const y of geom.ys) assert.ok(y >= 0 && y <= geom.h, `limit line at y=${y} is inside the box`);
+});
