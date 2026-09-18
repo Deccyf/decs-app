@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- Built from src/ by build.js. Edit the source and run `npm run build`; changes made here are overwritten. -->
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#1F3A5F" id="themeColor">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Dec's Tracker</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231F3A5F'/%3E%3Ctext x='32' y='43' font-family='Arial' font-weight='800' font-size='30' fill='%232A9D8F' text-anchor='middle'%3ED%3C/text%3E%3C/svg%3E">
+<style>
+<!--@css--></style>
+</head>
+<body>
+<header id="hdr">
+  <div class="hgrp"><h1 id="title">Dec's Tracker</h1><div class="sub" id="sub"></div></div>
+  <button class="iconbtn" data-act="theme" id="themeBtn" aria-label="Change theme"></button>
+</header>
+<main id="view"></main>
+<nav class="tabs" id="tabs" role="tablist" aria-label="Sections"></nav>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog id="dlg"><form method="dialog" class="dlg" id="dlgForm"></form></dialog>
+<div class="lockwrap" id="lock" hidden>
+  <form class="lockcard" id="lockForm">
+    <div class="lockmark" aria-hidden="true">D</div>
+    <h2 id="lockTitle">Dec's Tracker</h2>
+    <p class="muted" id="lockHint">Enter your PIN to unlock</p>
+    <input type="password" inputmode="numeric" autocomplete="current-password" id="pinIn"
+      aria-label="PIN" placeholder="••••••">
+    <button class="btn" type="submit" id="lockGo">Unlock</button>
+    <div class="lockerr" id="lockErr" role="alert"></div>
+    <button type="button" class="locklink" data-act="forgotPin">Forgotten your PIN?</button>
+  </form>
+</div>
+<script id="seed" type="application/json"><!--@seed--></script>
+<script>
+<!--@js--></script>
+</body>
+</html>
