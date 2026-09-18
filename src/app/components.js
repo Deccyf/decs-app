@@ -4,6 +4,16 @@ function ledgerRow(e, runningBal, gone) {
     <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
     <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
 }
+function potRow(p) {
+  return `<div class="prow"><div><b>${esc(p.name || 'Pot')}</b>
+      <small class="meta">${p.target
+        ? (p.done ? 'target of ' + C.gbp(p.target, 0) + ' reached'
+          : C.gbp(p.toGo) + ' to go of ' + C.gbp(p.target, 0)
+            + (p.by ? ' · there by ' + esc(C.fmtM(C.mkey(p.by))) : p.stalled ? ' · nothing going in' : ''))
+        : (p.monthly ? C.gbp(p.monthly) + ' a month, no target set' : 'no target set')}</small></div>
+    <div class="num tr"><b>${C.gbp(p.balance)}</b>${p.target ? `<div class="muted small">${C.pct(p.pct)}</div>` : ''}</div>
+    ${p.target ? `<div class="pb">${bar(p.pct, p.done ? '' : 'teal')}</div>` : ''}</div>`;
+}
 /* ---- the Pay tab, in pieces ---- */
 const resRow = (l, v, cls = '') => `<div class="r ${cls}"><span>${esc(l)}</span><span class="num">${v}</span></div>`;
 function payslipCard(r) {

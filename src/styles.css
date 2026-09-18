@@ -111,6 +111,7 @@ main{padding:2px 12px 20px;max-width:760px;margin:0 auto}
 .teal{background:var(--teal);color:#06231F}
 .amber{background:var(--amber);color:#3A2E0B}
 .coral{background:var(--coral);color:#3A1408}
+.forest{background:var(--forest);color:#05230F}
 
 /* ===================================================================
    Rows / lists
@@ -168,6 +169,13 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
   transition:background .15s,color .15s}
 .seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:var(--sh-1)}
 .subnav{margin:12px 0 0}
+/* Home's "needs a look" rows: each one is a link into the section that deals with it */
+.attnrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);
+  background:none;color:var(--ink);font:inherit;font-size:13.5px;line-height:1.45;padding:11px 0;cursor:pointer}
+.attnrow:last-child{border-bottom:0}
+.attnrow span{flex:1}
+.attnrow i{font-style:normal;color:var(--muted);font-size:22px;line-height:1}
+.attnrow.bad{color:var(--bad)}
 :root[data-theme="dark"] .seg button[aria-pressed="true"]{background:var(--brand);color:var(--on-brand)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .seg button[aria-pressed="true"]{background:var(--brand);color:var(--on-brand)}}
 

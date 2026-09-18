@@ -758,3 +758,49 @@ test('the Pay tab keeps its payslip, board, holiday pay and settings', skip, asy
   await page.click('[data-act="hstep"][data-kind="ot"][data-d="1"]'); await page.waitForTimeout(300);
   assert.equal(await page.$eval('[data-hours="ot"]', e => e.value), '1', 'logging hours still works');
 });
+
+test('Home is a dashboard: attention items, this week, and headline tiles', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: 1000, balanceOn: '2026-09-01', overdraft: 0, amex: 900, amexBefore: false });
+  data.money.bills = [
+    { id: '1', name: 'Rent', category: 'Housing', amount: 780, dueDay: 1, started: '2024-01' },
+    { id: '2', name: 'Council Tax', category: 'Housing', amount: 168, dueDay: 13, started: '2024-01' },
+    { id: '3', name: 'Energy', category: 'Utilities', amount: 96, dueDay: 20, started: '2024-01' },
+    { id: '4', name: 'Gym', category: 'Health & Fitness', amount: 32, dueDay: null, started: '2024-01' }
+  ];
+  data.money.pots = [{ id: 'p1', name: 'Holiday', balance: 400, target: 1000, monthly: 100 }];
+  const page = await open(t, { on: '2026-09-09', data });   // 16 days to pay day, balance 8 days old
+  const heads = await page.$$eval('#view .card h2', es => es.map(e => e.firstChild.textContent.trim()));
+  assert.deepEqual(heads, ['Needs a look', 'This week', 'Saving', 'Everything else']);
+
+  const attn = await page.$$eval('.attnrow', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+  assert.ok(attn.some(x => /Balance is 8 days old/.test(x)), 'stale balance flagged');
+  assert.ok(attn.some(x => /One bill has no payment date/.test(x)), 'undated bill flagged');
+  assert.ok(!attn.some(x => /on the card/.test(x)), 'the card is not nagged about 16 days out');
+
+  const week = await page.$$eval('.lrow', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+  assert.equal(week.length, 1, 'only Council Tax (Mon 14) falls in the next seven days');
+  assert.match(week[0], /Council Tax/);
+  assert.match(await page.$eval('#view', e => e.textContent), /1 more before pay day/);
+
+  const tiles = await page.$$eval('.tile .cap', es => es.map(e => e.textContent));
+  assert.deepEqual(tiles, ['Safe to spend', 'Next pay day', 'Saved this year', 'Pots less short-term debt']);
+  assert.match(await page.$eval('.tiles', e => e.textContent), /in 16 days · Fri 25 Sep/);
+
+  await page.click('.attnrow'); await page.waitForTimeout(300);
+  assert.equal(await page.$eval('#title', e => e.textContent), 'Money', 'an attention row opens the section that deals with it');
+  const tall = await page.evaluate(() => document.documentElement.scrollHeight);
+  assert.ok(tall < 874 * 3, `Money/Now is ${(tall / 874).toFixed(1)} screens`);
+});
+
+test('Home stays quiet when nothing needs a look', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: 3000, balanceOn: '2026-09-09', overdraft: 0, amex: null });
+  data.money.bills = [{ id: '1', name: 'Rent', category: 'Housing', amount: 780, dueDay: 1, started: '2024-01' }];
+  const page = await open(t, { on: '2026-09-09', data });
+  const heads = await page.$$eval('#view .card h2', es => es.map(e => e.firstChild.textContent.trim()));
+  assert.ok(!heads.includes('Needs a look'), 'no attention card when there is nothing to say');
+  assert.match(await page.$eval('#view', e => e.textContent), /Nothing leaves in the next seven days/);
+  const tall = await page.evaluate(() => document.documentElement.scrollHeight);
+  assert.ok(tall < 874 * 2.2, `Home is ${(tall / 874).toFixed(1)} screens`);
+});
