@@ -1155,7 +1155,17 @@ function setPath(o, p, v) {
   const t = ks.reduce((a, k) => (a && typeof a === 'object' ? (a[k] = a[k] || {}) : null), o);
   if (t) t[last] = v;
 }
-function commit() { save(); render(); }
+/* Save at once; redraw a tick later. A change event fires before the browser
+   has moved focus on a Tab, so redrawing inside the handler rebuilt the view
+   under a focus move that then landed on a detached element. Deferring lets
+   the move finish, and the redraw then finds and keeps the new field. */
+let renderQueued = false;
+function commit() {
+  save();
+  if (renderQueued) return;
+  renderQueued = true;
+  setTimeout(() => { renderQueued = false; render(); }, 0);
+}
 let toastT; function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2000); }
 
 /* ---------- theme ---------- */
@@ -1823,9 +1833,12 @@ function cssVar(n, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   return v || fallback;
 }
+/* The view that owns the chart hands its rows over in what it returns; the
+   money maths used to be run a second time here just to get them back. */
+let chartData = null;
 function drawChart() {
   const cv = $('#chart'); if (!cv) return;
-  const data = C.moneyCalc(S.money).last12; if (!data.length) return;
+  const data = chartData; if (!data || !data.length) return;
   const dpr = window.devicePixelRatio || 1, H = 210, padL = 44, padB = 26, padT = 10;
   const avail = (cv.parentElement && cv.parentElement.clientWidth) || 320;
   const W = Math.max(avail, padL + 6 + 46 * data.length);        // give every month room; the wrapper scrolls
@@ -1852,13 +1865,34 @@ function drawChart() {
   });
 }
 
-/* ---------- render ---------- */
+/* ---------- render ----------
+   Every change redraws the whole view, which destroys whatever had focus. Tab
+   from a bill's name to its amount and the change event fires, the view is
+   rebuilt, and the field you were moving into is gone from under you. So the
+   focused field is remembered by what it edits and the caret put back. */
+function rememberFocus() {
+  const el = document.activeElement, view = $('#view');
+  if (!el || !view || !view.contains(el)) return null;
+  const sel = el.dataset.set ? `[data-set="${CSS.escape(el.dataset.set)}"]`
+    : el.dataset.hours ? `[data-hours="${el.dataset.hours}"][data-payday="${el.dataset.payday}"]`
+    : el.id ? `#${CSS.escape(el.id)}` : null;
+  if (!sel) return null;
+  let start = null, end = null;
+  try { start = el.selectionStart; end = el.selectionEnd; } catch (e) { }   // number inputs refuse
+  return { sel, start, end };
+}
+function restoreFocus(f) {
+  if (!f) return;
+  const el = $('#view ' + f.sel); if (!el) return;
+  el.focus({ preventScroll: true });
+  if (f.start !== null && f.start !== undefined) { try { el.setSelectionRange(f.start, f.end); } catch (e) { } }
+}
 function buildTabs() {
   const n = $('#tabs');
   n.innerHTML = TABS.map(t => `<button role="tab" data-act="tab" data-tab="${t.k}" aria-selected="false" aria-controls="view">${svg(t.d)}<span>${t.l}</span></button>`).join('');
 }
 function render(keepScroll = true) {
-  const y = window.scrollY;
+  const y = window.scrollY, focus = rememberFocus();
   let v;
   try { v = VIEWS[tab](); } catch (err) {
     console.error(err);
@@ -1874,8 +1908,10 @@ function render(keepScroll = true) {
     b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
   $('#settingsBtn').classList.toggle('on', tab === 'settings');
+  chartData = v.chart || null;
   drawChart();
   window.scrollTo(0, keepScroll ? y : 0);
+  restoreFocus(focus);
 }
 function parseInput(el) {
   if (el.type === 'checkbox') return el.checked;

@@ -3,9 +3,12 @@ function cssVar(n, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   return v || fallback;
 }
+/* The view that owns the chart hands its rows over in what it returns; the
+   money maths used to be run a second time here just to get them back. */
+let chartData = null;
 function drawChart() {
   const cv = $('#chart'); if (!cv) return;
-  const data = C.moneyCalc(S.money).last12; if (!data.length) return;
+  const data = chartData; if (!data || !data.length) return;
   const dpr = window.devicePixelRatio || 1, H = 210, padL = 44, padB = 26, padT = 10;
   const avail = (cv.parentElement && cv.parentElement.clientWidth) || 320;
   const W = Math.max(avail, padL + 6 + 46 * data.length);        // give every month room; the wrapper scrolls

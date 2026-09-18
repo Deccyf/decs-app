@@ -150,7 +150,17 @@ function setPath(o, p, v) {
   const t = ks.reduce((a, k) => (a && typeof a === 'object' ? (a[k] = a[k] || {}) : null), o);
   if (t) t[last] = v;
 }
-function commit() { save(); render(); }
+/* Save at once; redraw a tick later. A change event fires before the browser
+   has moved focus on a Tab, so redrawing inside the handler rebuilt the view
+   under a focus move that then landed on a detached element. Deferring lets
+   the move finish, and the redraw then finds and keeps the new field. */
+let renderQueued = false;
+function commit() {
+  save();
+  if (renderQueued) return;
+  renderQueued = true;
+  setTimeout(() => { renderQueued = false; render(); }, 0);
+}
 let toastT; function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2000); }
 
 /* ---------- theme ---------- */

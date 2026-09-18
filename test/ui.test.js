@@ -403,13 +403,13 @@ test('the home card totals only the payments it is not showing', skip, async t =
     { id: 'a', name: 'A', category: 'Other', amount: 10, dueDay: 11, started: '2024-01' },
     { id: 'b', name: 'B', category: 'Other', amount: 20, dueDay: 12, started: '2024-01' },
     { id: 'c', name: 'C', category: 'Other', amount: 30, dueDay: 15, started: '2024-01' },
-    { id: 'd', name: 'D', category: 'Other', amount: 40, dueDay: 16, started: '2024-01' },
-    { id: 'e', name: 'E', category: 'Other', amount: 50, dueDay: 17, started: '2024-01' }
+    { id: 'd', name: 'D', category: 'Other', amount: 40, dueDay: 20, started: '2024-01' },
+    { id: 'e', name: 'E', category: 'Other', amount: 50, dueDay: 22, started: '2024-01' }
   ];
   const page = await open(t, { on: '2026-09-10', data });
   const note = await page.$eval('#view .card .note', e => e.textContent.replace(/\s+/g, ' ').trim());
-  // three shown (10 + 20 + 30), two not (40 + 50 = 90), 150 altogether
-  assert.match(note, /\+ 2 more before pay day — £90\.00 of them, £150\.00 altogether/);
+  // three inside the week (10 + 20 + 30), two later (40 + 50 = 90), 150 altogether
+  assert.match(note, /2 more before pay day — £90\.00 of them, £150\.00 altogether/);
 });
 
 /* ------------------------------------------------------- chart containment -- */
@@ -718,4 +718,27 @@ test('the gear opens Settings: theme, PIN, backup and what is on the device', sk
 
   assert.match(await page.$eval('#view', e => e.textContent), /3 bills · 2 months · 1 debt · 1 house job · 1 card · 1 game/);
   assert.ok(await page.$('[data-act="export"]') && await page.$('[data-act="import"]') && await page.$('[data-act="setPin"]'));
+});
+
+test('tabbing between fields survives the redraw', skip, async t => {
+  const page = await open(t, { tab: 'money', sec: 'bills' });
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  await page.focus('[data-set="money.bills.0.name"]');
+  await page.keyboard.press('End');                       // focus() leaves the caret at 0; a tap would not
+  await page.keyboard.type(' (flat)');
+  await page.keyboard.press('Tab');                       // blur fires change -> full redraw
+  await page.waitForTimeout(350);
+  const active = await page.evaluate(() => (document.activeElement && document.activeElement.dataset.set) || document.activeElement.tagName);
+  assert.equal(active, 'money.bills.0.category', 'focus carried on to the next field, not dropped on the body');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.bills[0].name), 'Rent (flat)', 'and the edit landed');
+});
+
+test('the chart still draws after an edit in History', skip, async t => {
+  const page = await open(t, { tab: 'money', sec: 'history' });
+  const drawn = () => page.evaluate(() => { const c = document.getElementById('chart'); return c && c.width > 0 && c.height > 0; });
+  assert.ok(await drawn(), 'drawn on first render');
+  await page.fill('[data-set="money.months.1.saved"]', '300');
+  await page.dispatchEvent('[data-set="money.months.1.saved"]', 'change');
+  await page.waitForTimeout(350);
+  assert.ok(await drawn(), 'and again after the redraw, from the rows the view handed over');
 });

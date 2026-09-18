@@ -1,10 +1,31 @@
-/* ---------- render ---------- */
+/* ---------- render ----------
+   Every change redraws the whole view, which destroys whatever had focus. Tab
+   from a bill's name to its amount and the change event fires, the view is
+   rebuilt, and the field you were moving into is gone from under you. So the
+   focused field is remembered by what it edits and the caret put back. */
+function rememberFocus() {
+  const el = document.activeElement, view = $('#view');
+  if (!el || !view || !view.contains(el)) return null;
+  const sel = el.dataset.set ? `[data-set="${CSS.escape(el.dataset.set)}"]`
+    : el.dataset.hours ? `[data-hours="${el.dataset.hours}"][data-payday="${el.dataset.payday}"]`
+    : el.id ? `#${CSS.escape(el.id)}` : null;
+  if (!sel) return null;
+  let start = null, end = null;
+  try { start = el.selectionStart; end = el.selectionEnd; } catch (e) { }   // number inputs refuse
+  return { sel, start, end };
+}
+function restoreFocus(f) {
+  if (!f) return;
+  const el = $('#view ' + f.sel); if (!el) return;
+  el.focus({ preventScroll: true });
+  if (f.start !== null && f.start !== undefined) { try { el.setSelectionRange(f.start, f.end); } catch (e) { } }
+}
 function buildTabs() {
   const n = $('#tabs');
   n.innerHTML = TABS.map(t => `<button role="tab" data-act="tab" data-tab="${t.k}" aria-selected="false" aria-controls="view">${svg(t.d)}<span>${t.l}</span></button>`).join('');
 }
 function render(keepScroll = true) {
-  const y = window.scrollY;
+  const y = window.scrollY, focus = rememberFocus();
   let v;
   try { v = VIEWS[tab](); } catch (err) {
     console.error(err);
@@ -20,8 +41,10 @@ function render(keepScroll = true) {
     b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
   $('#settingsBtn').classList.toggle('on', tab === 'settings');
+  chartData = v.chart || null;
   drawChart();
   window.scrollTo(0, keepScroll ? y : 0);
+  restoreFocus(focus);
 }
 function parseInput(el) {
   if (el.type === 'checkbox') return el.checked;
