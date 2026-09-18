@@ -183,7 +183,7 @@ function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = f
   return new Promise(resolve => {
     const d = $('#dlg'), f = $('#dlgForm');
     f.innerHTML = `<h3>${esc(title)}</h3>${body ? `<p>${body}</p>` : ''}
-      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${inputType === 'password' ? ' inputmode="numeric" style="text-align:center;letter-spacing:.3em;font-size:20px"' : ''}></div>` : ''}
+      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${inputType === 'password' ? ' inputmode="numeric" class="pinin"' : ''}></div>` : ''}
       <div class="btnrow"><button class="btn ghost" value="cancel" type="submit">${esc(cancel)}</button>
       <button class="btn${danger ? ' danger' : ''}" value="ok" type="submit">${esc(ok)}</button></div>`;
     const done = () => {

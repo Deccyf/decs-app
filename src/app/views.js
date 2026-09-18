@@ -49,7 +49,7 @@ function flowOptions() {
     return s.moved ? `A bill dated ${C.fmtDow(d)} would be taken ${C.fmtDow(s.date)}.`
       : `A bill dated ${C.fmtDow(d)} would be taken that same day.`;
   })();
-  return `<div class="eyebrow" style="margin-top:4px">When a bill lands on a non-working day</div>
+  return `<div class="eyebrow mt4">When a bill lands on a non-working day</div>
     ${segment('shift', m.dueShift, [{ v: 'exact', l: 'Take the date' }, { v: 'next', l: 'Next working day' }, { v: 'prev', l: 'Day before' }])}
     <div class="note">${esc(sample)}</div>
     ${toggle('money.bankHols', m.bankHols, 'Count bank holidays too', 'England & Wales dates, worked out in the app — Easter included.')}`;
@@ -91,8 +91,8 @@ const VIEWS = {
     if (fl.events.length || fl.hasBal) {
       const nextFew = fl.events.slice(0, 3);
       h += `<div class="card"><h2>Still to come out<span class="hint">${fl.events.length} before pay day</span></h2>
-        ${fl.hasBal && fl.shortfall ? `<div class="banner bad" style="margin:8px 0"><b>${fl.overdraft ? 'Past your overdraft.' : "That doesn't stretch."}</b> The balance dips to ${C.gbp(fl.low.bal)} on ${esc(C.fmtD(fl.low.date))}.</div>`
-          : fl.hasBal && fl.intoOverdraft ? `<div class="banner" style="margin:8px 0"><b>Into your overdraft.</b> Down to ${C.gbp(fl.low.bal)} on ${esc(C.fmtD(fl.low.date))}, ${C.gbp(fl.headroom)} of the limit spare.</div>` : ''}
+        ${fl.hasBal && fl.shortfall ? `<div class="banner bad my8"><b>${fl.overdraft ? 'Past your overdraft.' : "That doesn't stretch."}</b> The balance dips to ${C.gbp(fl.low.bal)} on ${esc(C.fmtD(fl.low.date))}.</div>`
+          : fl.hasBal && fl.intoOverdraft ? `<div class="banner my8"><b>Into your overdraft.</b> Down to ${C.gbp(fl.low.bal)} on ${esc(C.fmtD(fl.low.date))}, ${C.gbp(fl.headroom)} of the limit spare.</div>` : ''}
         ${nextFew.length ? `<div class="ledger">${nextFew.map(e => ledgerRow(e)).join('')}</div>` : '<div class="empty">Nothing left to leave before pay day.</div>'}
         ${(() => { const rest = fl.events.slice(3);
           return rest.length ? `<div class="note">+ ${rest.length} more before pay day — ${C.gbp(rest.reduce((a, e) => a + e.amount, 0))} of them, ${C.gbp(fl.outgoings)} altogether.</div>` : ''; })()}
@@ -101,7 +101,7 @@ const VIEWS = {
 
     if (nx) h += `<div class="card"><div class="eyebrow">Next pay day · ${esc(C.fmtD(nx.payday))}</div>
       <div class="payhead"><div class="big">${C.gbp(nx.net)}</div><div class="muted">${nx.extraGross ? 'incl. ' + C.gbp(nx.extra) + ' from overtime' : 'no overtime logged yet'}</div></div>
-      <div class="muted small" style="margin:6px 0 10px">${nx.ot || 0} overtime hrs · ${nx.sun || 0} Sunday hrs · period ${esc(C.fmtDM(nx.start))} – ${esc(C.fmtDM(nx.end))}</div>
+      <div class="muted small lead">${nx.ot || 0} overtime hrs · ${nx.sun || 0} Sunday hrs · period ${esc(C.fmtDM(nx.start))} – ${esc(C.fmtDM(nx.end))}</div>
       <button class="btn teal" data-act="tab" data-tab="pay">Log hours</button></div>`;
 
     h += `<div class="card"><h2>Collections &amp; house</h2>
@@ -110,7 +110,7 @@ const VIEWS = {
     </div>`;
 
     h += `<div class="card"><h2>Gaming</h2><div class="stats"><div class="stat"><b>${g.thisYear}</b><span>this year</span></div><div class="stat"><b>${g.lastYear}</b><span>last year</span></div><div class="stat"><b>${g.total}</b><span>all time</span></div></div>
-      ${g.last ? `<div class="row" style="margin-top:4px"><div class="l"><b>${esc(g.last.game)}</b><small>last completed · ${esc(C.fmtD(g.last.date))} · ${g.daysSince} days ago</small></div></div>` : ''}
+      ${g.last ? `<div class="row mt4"><div class="l"><b>${esc(g.last.game)}</b><small>last completed · ${esc(C.fmtD(g.last.date))} · ${g.daysSince} days ago</small></div></div>` : ''}
       ${recent(4)}</div>`;
 
     h += backupCard('Settings & backup', `Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Settings each April.`);
@@ -137,7 +137,7 @@ const VIEWS = {
         ${res('Net pay', C.gbp(r.net), 'total')}
         ${res('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}
       </div></div>`;
-    h += `<div class="card board"><h2>Pay days</h2><div class="muted small" style="margin-bottom:4px">Tap a year to open or close it, then tap a pay day to log hours for it.</div>
+    h += `<div class="card board"><h2>Pay days</h2><div class="muted small mb4">Tap a year to open or close it, then tap a pay day to log hours for it.</div>
       ${(() => {
         const groups = [];
         p.rows.forEach((x, i) => { const y = x.payday.slice(0, 4); let g = groups[groups.length - 1];
@@ -149,16 +149,16 @@ const VIEWS = {
           const head = `<button class="yearhdr" data-act="yeartoggle" data-y="${g.y}" aria-expanded="${open}"><span>${g.y}</span><span class="ym">${logged ? logged + ' with hours · ' : ''}${g.rows.length} pay days<i aria-hidden="true">${open ? '−' : '+'}</i></span></button>`;
           if (!open) return head;
           return head + g.rows.map(({ x, i }) => `<button class="brow ${x.past ? 'past' : ''} ${x.next ? 'nextpd' : ''} ${i === idx ? 'sel' : ''}" data-act="pick" data-payday="${x.payday}"${i === idx ? ' aria-current="true"' : ''}>
-            <div><div class="d">${esc(C.fmtD(x.payday))}${x.next ? '<span class="tag">NEXT</span>' : ''}</div><div class="pr">${esc(C.fmtDM(x.start))} – ${esc(C.fmtDM(x.end))}</div></div>
-            <div class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.hpaPay ? '<div class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</div>' : ''}${x.backpay ? '<div class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</div>' : ''}</div>
-            <div class="n">${C.gbp(x.net, 0)}${x.extraGross ? `<div class="muted small">+${C.gbp(x.extra, 0)}</div>` : ''}</div></button>`).join('');
+            <span class="bl"><span class="d">${esc(C.fmtD(x.payday))}${x.next ? '<span class="tag">NEXT</span>' : ''}</span><span class="pr">${esc(C.fmtDM(x.start))} – ${esc(C.fmtDM(x.end))}</span></span>
+            <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
+            <span class="n">${C.gbp(x.net, 0)}${x.extraGross ? `<span class="muted small">+${C.gbp(x.extra, 0)}</span>` : ''}</span></button>`).join('');
         }).join('');
       })()}
-      <div class="row" style="margin-top:8px"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h overtime · ${p.totals.sun}h Sunday · ${C.gbp(p.totals.extraGross, 0)} gross extra</small></div><div class="num" style="text-align:right"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
+      <div class="row" style="margin-top:8px"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h overtime · ${p.totals.sun}h Sunday · ${C.gbp(p.totals.extraGross, 0)} gross extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
     </div>`;
-    h += `<div class="card"><h2>EU Holiday Pay</h2><div class="muted small" style="margin-bottom:4px">Southeastern's Holiday Pay Adjustment: 4/52 of a calendar year's overtime and Sunday pay, paid on the first pay day in March of the next year. Taxed and NI'd like normal pay.</div>
+    h += `<div class="card"><h2>EU Holiday Pay</h2><div class="muted small mb4">Southeastern's Holiday Pay Adjustment: 4/52 of a calendar year's overtime and Sunday pay, paid on the first pay day in March of the next year. Taxed and NI'd like normal pay.</div>
       ${p.hpa.filter(y => y.received != null || y.qualifying > 0 || y.year === C.today().slice(0, 4)).map(y => `<div class="row"><div class="l"><b>${esc(y.year)}</b><small>${y.received != null ? 'received ' + (y.payday ? esc(C.fmtD(y.payday)) : '') : (y.qualifying != null ? C.gbp(y.qualifying) + ' qualifying · ' + y.logged + ' of ' + y.periods + ' periods with hours · due ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : '')}</small></div>
-        <div class="num" style="text-align:right"><b>${C.gbp(y.gross)}</b>${y.gross ? `<div class="muted small">≈ ${C.gbp(y.net, 0)} after tax</div>` : ''}</div></div>`).join('') || '<div class="empty">Log some hours and the estimate appears here.</div>'}
+        <div class="num tr"><b>${C.gbp(y.gross)}</b>${y.gross ? `<div class="muted small">≈ ${C.gbp(y.net, 0)} after tax</div>` : ''}</div></div>`).join('') || '<div class="empty">Log some hours and the estimate appears here.</div>'}
       <div class="note">What counts: overtime, rest day working, Sunday working/premiums, night and higher-grade payments. Basic pay and London Allowance don't. The estimate only covers periods with hours logged here.</div></div>`;
     h += paySettings(p);
     if (PAY_ONLY) h += backupCard('Backup', `Tax and NI rates are HMRC's 2026/27 figures (England, Wales & NI, category A). Update them in Settings each April.`);
@@ -199,12 +199,12 @@ const VIEWS = {
         <div class="results"><div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
         ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>` : ''}</div>`;
     }
-    h += `${fl.wasCarried ? `<div class="note" style="margin-top:2px">Carried forward from the <b>${C.gbp(fl.typed)}</b> you entered on ${esc(C.fmtD(fl.typedOn))}${fl.carriedOut ? `, less <b>${C.gbp(fl.carriedOut)}</b> of bills` : ''}${fl.carriedIn ? `, plus <b>${C.gbp(fl.carriedIn)}</b> of pay` : ''} since.</div>` : ''}
+    h += `${fl.wasCarried ? `<div class="note mt2">Carried forward from the <b>${C.gbp(fl.typed)}</b> you entered on ${esc(C.fmtD(fl.typedOn))}${fl.carriedOut ? `, less <b>${C.gbp(fl.carriedOut)}</b> of bills` : ''}${fl.carriedIn ? `, plus <b>${C.gbp(fl.carriedIn)}</b> of pay` : ''} since.</div>` : ''}
       ${fl.wasCarried ? detailsBlock('carried', `What's come off since ${C.fmtDM(fl.typedOn)}`,
         `<div class="ledger">${fl.carried.map(e => ledgerRow(e, null, true)).join('')}${fl.carriedPays.map(r => `<div class="lrow gone"><div class="ld"><span>${esc(C.DOW[C.dow(r.payday)])}</span>${+r.payday.slice(8)}</div>
           <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(r.payday)))}</small></div><div class="lv pos">+${C.gbp(r.net)}</div></div>`).join('')}</div>
          <div class="note">Only bills and pay are counted here. Day-to-day spending isn't — so retype your balance whenever you check the bank, and the running total starts again from that figure.</div>`) : ''}
-      <div class="grid2" style="margin-top:14px">${field(fl.typedOn ? `Balance (${C.fmtDM(fl.typedOn)})` : 'Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}
+      <div class="grid2 mt14">${field(fl.typedOn ? `Balance (${C.fmtDM(fl.typedOn)})` : 'Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}
       ${field('Overdraft limit', inp('money.overdraft', S.money.overdraft, 'number', 'min="0" placeholder="0"'))}
       ${field('Room left at lowest', `<input type="text" value="${fl.hasBal && fl.low ? esc(C.gbp(fl.headroom)) : '–'}" disabled>`)}</div>
       <div class="sep"></div>
@@ -224,9 +224,9 @@ const VIEWS = {
       <div class="sep"></div>
       <div class="note">Your overdraft is the most you can go into minus before a payment bounces — leave it at 0 if you haven't got one. It counts as spendable room, so the figure above is what's free <i>including</i> it.
       Retype the balance whenever you check your bank — the running total restarts from whatever you enter, and bills come off again as the days pass. Overdrawn? Type the amount, then tap <b>+</b> beside it to flip it to <b>−</b>.</div>
-      ${fl.paydayPassed ? `<div class="banner" style="margin-top:12px"><b>Pay day has been since you typed this.</b> The figures above are worked forward from ${esc(C.fmtD(fl.typedOn))} — check your bank and retype it.${fl.amex ? ` Paid the card? Press <b>Pay now</b> under American Express.` : ''}</div>`
-        : fl.staleDays >= 14 ? `<div class="banner" style="margin-top:12px"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
-      ${m.undated ? `<div class="banner" style="margin-top:12px"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} in <b>Bills</b>.</div>` : ''}
+      ${fl.paydayPassed ? `<div class="banner mt12"><b>Pay day has been since you typed this.</b> The figures above are worked forward from ${esc(C.fmtD(fl.typedOn))} — check your bank and retype it.${fl.amex ? ` Paid the card? Press <b>Pay now</b> under American Express.` : ''}</div>`
+        : fl.staleDays >= 14 ? `<div class="banner mt12"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
+      ${m.undated ? `<div class="banner mt12"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} in <b>Bills</b>.</div>` : ''}
       ${fl.events.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
         (() => { let bal = fl.hasBal ? fl.start : null;
           return fl.events.map(e => { if (bal !== null) bal = C.r2(bal - e.amount); return ledgerRow(e, bal); }).join('')
@@ -242,13 +242,13 @@ const VIEWS = {
     /* --- 2. disposable income per pay period --- */
     h += `<div class="card"><h2>Disposable by pay period<span class="hint">from bill dates</span></h2>
       <div class="muted small">You're paid every 28 days but bills come out monthly, so some periods carry two of the same bill and some carry none. This counts what actually leaves inside each period.</div>
-      <div style="margin-top:10px">${flows.map(f => {
+      <div class="mt10">${flows.map(f => {
         const dupes = {}; f.events.forEach(e => { dupes[e.name] = (dupes[e.name] || 0) + 1; });
         const twice = Object.keys(dupes).filter(k => dupes[k] > 1);
         const share = f.net > 0 ? Math.min(f.outgoings / f.net, 1) : 0;
         return `<div class="perrow"><div><b>${esc(C.fmtDM(f.from))} – ${esc(C.fmtDM(f.to))}</b>
             <small class="meta">${C.gbp(f.net, 0)} in · ${C.gbp(f.outgoings, 0)} out · ${f.events.length} bills${twice.length ? ' · twice: ' + esc(twice.join(', ')) : ''}</small></div>
-          <div class="num" style="text-align:right"><b class="${f.disposable < 0 ? 'neg' : ''}" style="font-size:17px">${C.gbp(f.disposable, 0)}</b>
+          <div class="num tr"><b class="strong ${f.disposable < 0 ? 'neg' : ''}">${C.gbp(f.disposable, 0)}</b>
             <div class="muted small">${C.pct(share)} on bills</div></div>
           <div class="pb">${bar(share, share > 0.85 ? 'coral' : share > 0.7 ? 'amber' : 'teal')}</div></div>`;
       }).join('') || '<div class="empty">Add bill payment dates and your pay details to see this.</div>'}</div>
@@ -260,9 +260,9 @@ const VIEWS = {
     /* --- 3. history --- */
     h += `<div class="card"><h2>By year</h2><div class="tscroll"><table class="table"><tr><th>Year</th><th>Earnings</th><th>Bills</th><th>Disposable</th><th>Saved</th><th>Rate</th></tr>
       ${m.byYear.filter(y => y.n || y.saved).map(y => `<tr><td>${y.year}</td><td>${C.gbp(y.earnings, 0)}</td><td>${C.gbp(y.outgoings, 0)}</td><td>${C.gbp(y.disposable, 0)}</td><td>${C.gbp(y.saved, 0)}</td><td>${C.pct(y.rate)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No months filled in yet.</td></tr>'}</table></div>
-      <div class="chartwrap"><canvas id="chart"></canvas></div><div class="chartkey"><span><i style="background:var(--brand)"></i>Earnings</span><span><i style="background:var(--teal)"></i>Disposable</span><span class="muted">last 12 months — swipe to see them all</span></div></div>`;
+      <div class="chartwrap"><canvas id="chart"></canvas></div><div class="chartkey"><span><i class="k-brand"></i>Earnings</span><span><i class="k-teal"></i>Disposable</span><span class="muted">last 12 months — swipe to see them all</span></div></div>`;
     h += `<div class="card"><h2>Month by month</h2><div class="muted small">Type earnings and what you actually saved. Bills and disposable work themselves out.</div>
-      ${months.map(x => { const i = S.money.months.findIndex(q => q.month === x.month); return `<div class="mrow"><div class="mhead"><b>${esc(C.fmtM(x.month))}</b><span class="disp ${x.disposable < 0 ? 'neg' : ''}">${x.has ? C.gbp(x.disposable) : '<span class="muted" style="font-weight:600">no earnings yet</span>'}</span></div>
+      ${months.map(x => { const i = S.money.months.findIndex(q => q.month === x.month); return `<div class="mrow"><div class="mhead"><b>${esc(C.fmtM(x.month))}</b><span class="disp ${x.disposable < 0 ? 'neg' : ''}">${x.has ? C.gbp(x.disposable) : '<span class="muted semi">no earnings yet</span>'}</span></div>
         <div class="mgrid">${field('Earnings', inp(`money.months.${i}.earnings`, x.earnings))}${field('Actually saved', signedInp(`money.months.${i}.saved`, x.saved))}</div>
         ${x.has ? `<div class="note">Bills ${C.gbp(x.outgoings)} · potential savings ${C.gbp(x.potential)} (disposable minus the ${C.gbp(S.money.buffer, 0)} buffer)</div>` : ''}</div>`; }).join('') || '<div class="empty">No months yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="showAllMonths">${ui.showAllMonths ? 'Show fewer months' : 'Show all months'}</button><button class="btn sm" data-act="addMonth">Add ${esc(C.fmtM(nextMonthKey()))}</button></div></div>`;
@@ -276,7 +276,7 @@ const VIEWS = {
           ${field('Day of month it leaves', inp(`money.bills.${i}.dueDay`, b.dueDay, 'number', 'min="1" max="31" step="1" placeholder="1–31"'))}
           ${field('Started', inp(`money.bills.${i}.started`, b.started, 'month'))}${field('Ended (blank = still paying)', inp(`money.bills.${i}.ended`, b.ended, 'month'))}
           <div class="full"><button class="btn danger sm" data-act="delBill" data-i="${i}">Remove ${esc(b.name || 'bill')}</button></div></div>`).join('') || '<div class="empty">No bills yet.</div>'
-        : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span style="color:var(--warn)">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
+        : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editBills">${ui.editBills ? 'Done' : 'Edit bills'}</button>${ui.editBills ? '<button class="btn sm" data-act="addBill">Add bill</button>' : ''}</div>
       ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
         return cats.length > 1 ? `<div class="sep"></div><div class="eyebrow">Where it goes each month</div>
@@ -290,10 +290,10 @@ const VIEWS = {
       const recent = hist.filter(x => x.last.month >= C.mkey(C.addMonths(C.today(), -12)));
       h += `<div class="card"><h2>Price changes<span class="hint">${hist.length} bill${hist.length === 1 ? '' : 's'}</span></h2>
         <div class="row"><div class="l"><b>${monthly >= 0 ? 'More' : 'Less'} than when you started tracking</b><small>across ${hist.length} bill${hist.length === 1 ? '' : 's'} that have changed price</small></div>
-          <div class="num" style="text-align:right"><b class="${monthly > 0 ? 'neg' : 'pos'}" style="font-size:18px">${monthly > 0 ? '+' : ''}${C.gbp(monthly)}</b><div class="muted small">${monthly > 0 ? '+' : ''}${C.gbp(monthly * 12, 0)} a year</div></div></div>
+          <div class="num tr"><b class="strong ${monthly > 0 ? 'neg' : 'pos'}">${monthly > 0 ? '+' : ''}${C.gbp(monthly)}</b><div class="muted small">${monthly > 0 ? '+' : ''}${C.gbp(monthly * 12, 0)} a year</div></div></div>
         ${hist.map(x => `<div class="prow"><div><b>${esc(x.name)}</b>
             <small class="meta">${C.gbp(x.first)} ${esc(C.fmtMs(x.since))} → ${C.gbp(x.current)} now${x.changes.length > 1 ? ` · ${x.changes.length} changes` : ''}</small></div>
-          <div class="num" style="text-align:right"><b class="${x.total > 0 ? 'neg' : 'pos'}">${x.total > 0 ? '+' : ''}${C.gbp(x.total)}</b>
+          <div class="num tr"><b class="${x.total > 0 ? 'neg' : 'pos'}">${x.total > 0 ? '+' : ''}${C.gbp(x.total)}</b>
             <div class="muted small">${esc(C.fmtMs(x.last.month))} ${x.last.diff > 0 ? '+' : ''}${C.gbp(x.last.diff)}</div></div>
           <div class="pb">${(() => { const w = hist.reduce((m, y) => Math.max(m, Math.abs(y.total)), 0) || 1;
             return bar(Math.abs(x.total) / w, x.total > 0 ? 'coral' : 'teal'); })()}</div></div>`).join('')}
@@ -323,7 +323,7 @@ const VIEWS = {
                 : C.gbp(p.toGo) + ' to go of ' + C.gbp(p.target, 0)
                   + (p.by ? ' · there by ' + esc(C.fmtM(C.mkey(p.by))) : p.stalled ? ' · nothing going in' : ''))
               : (p.monthly ? C.gbp(p.monthly) + ' a month, no target set' : 'no target set')}</small></div>
-          <div class="num" style="text-align:right"><b>${C.gbp(p.balance)}</b>${p.target ? `<div class="muted small">${C.pct(p.pct)}</div>` : ''}</div>
+          <div class="num tr"><b>${C.gbp(p.balance)}</b>${p.target ? `<div class="muted small">${C.pct(p.pct)}</div>` : ''}</div>
           ${p.target ? `<div class="pb">${bar(p.pct, p.done ? '' : 'teal')}</div>` : ''}</div>`).join('') || '<div class="empty">No pots yet. Add one to track what you are putting aside.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editPots">${ui.editPots ? 'Done' : 'Edit pots'}</button>${ui.editPots ? '<button class="btn sm" data-act="addPot">Add pot</button>' : ''}</div>
       <div class="note">Pots sit outside the cash flow in <b>Now</b> — money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account. Put what goes in each month against a pot and it works out when you will get there.</div></div>`;
@@ -343,14 +343,14 @@ const VIEWS = {
   lists() {
     const done = S.house.filter(j => j.status === 'Done').length, tot = S.house.length;
     let h = `<div class="card"><h2>House jobs</h2><div class="row"><div class="l"><b>${done} of ${tot} done</b></div><div class="num">${C.pct(tot ? done / tot : 0)}</div></div>${bar(tot ? done / tot : 0, 'amber')}
-      <div style="margin-top:4px">${ui.editJobs ? S.house.map((j, i) => `<div class="erow"><div class="full">${field('Job', inp(`house.${i}.job`, j.job, 'text'))}</div>${field('Date done', inp(`house.${i}.dateDone`, j.dateDone, 'date'))}${field('Notes', inp(`house.${i}.notes`, j.notes, 'text'))}<div class="full"><button class="btn danger sm" data-act="delJob" data-i="${i}">Remove ${esc(j.job || 'job')}</button></div></div>`).join('') || '<div class="empty">No jobs yet.</div>'
-        : S.house.map((j, i) => `<div class="row"><div class="l"><b style="${j.status === 'Done' ? 'color:var(--muted);text-decoration:line-through' : ''}">${esc(j.job)}</b><small>${j.dateDone ? esc(C.fmtD(j.dateDone)) : ''}${j.notes ? (j.dateDone ? ' · ' : '') + esc(j.notes) : ''}</small></div><button class="status ${j.status.replace(' ', '')}" data-act="cycle" data-i="${i}">${esc(j.status)}</button></div>`).join('') || '<div class="empty">No jobs yet.</div>'}</div>
+      <div class="mt4">${ui.editJobs ? S.house.map((j, i) => `<div class="erow"><div class="full">${field('Job', inp(`house.${i}.job`, j.job, 'text'))}</div>${field('Date done', inp(`house.${i}.dateDone`, j.dateDone, 'date'))}${field('Notes', inp(`house.${i}.notes`, j.notes, 'text'))}<div class="full"><button class="btn danger sm" data-act="delJob" data-i="${i}">Remove ${esc(j.job || 'job')}</button></div></div>`).join('') || '<div class="empty">No jobs yet.</div>'
+        : S.house.map((j, i) => `<div class="row"><div class="l"><b class="${j.status === 'Done' ? 'done' : ''}">${esc(j.job)}</b><small>${j.dateDone ? esc(C.fmtD(j.dateDone)) : ''}${j.notes ? (j.dateDone ? ' · ' : '') + esc(j.notes) : ''}</small></div><button class="status ${j.status.replace(' ', '')}" data-act="cycle" data-i="${i}">${esc(j.status)}</button></div>`).join('') || '<div class="empty">No jobs yet.</div>'}</div>
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editJobs">${ui.editJobs ? 'Done' : 'Edit jobs'}</button>${ui.editJobs ? '<button class="btn sm" data-act="addJob">Add job</button>' : ''}</div>
       <div class="note">Tap a status to move it on: To do → In progress → Done (sets today's date).</div></div>`;
     const cols = C.collections(S); const c = cols.find(x => x.key === ui.set) || cols[0];
     h += `<div class="card"><h2>Collections</h2><div class="chips">${cols.filter(x => x.key !== 'PSM demos').map(x => `<button class="chip ${x.key === c.key || (c.key === 'PSM demos' && x.key === 'PSM') ? 'on' : ''}" data-act="set" data-set="${esc(x.key)}">${esc(x.label)}</button>`).join('')}</div>
       ${c.key.startsWith('PSM') ? cols.filter(x => x.key.startsWith('PSM')).map(x => `<div class="prow"><span><b>${esc(x.label)}</b></span><span class="num muted small">${x.have} / ${x.total} · ${C.pct(x.pct)}</span>${bar(x.pct)}</div>`).join('') : `<div class="prow"><span><b>${esc(c.label)}</b></span><span class="num muted small">${c.have} / ${c.total} · ${C.pct(c.pct)}</span>${bar(c.pct)}</div>`}
-      <div class="field" style="margin:12px 0 4px"><input type="search" id="search" placeholder="Search…" aria-label="Search this collection" value="${esc(ui.search)}"></div>
+      <div class="field searchbox"><input type="search" id="search" placeholder="Search…" aria-label="Search this collection" value="${esc(ui.search)}"></div>
       <div id="ticklist">${tickList()}</div></div>`;
     return { title: 'Lists', sub: 'house jobs · collections', html: h };
   },

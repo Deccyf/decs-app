@@ -10,7 +10,7 @@ function render(keepScroll = true) {
     console.error(err);
     v = { title: 'Something broke', sub: '', html: `<div class="card"><h2>That view wouldn't draw</h2>
       <div class="muted">Usually a backup with something missing in it. Your data is untouched — download it, then reset and restore.</div>
-      <pre class="mono small" style="white-space:pre-wrap;color:var(--bad);margin:12px 0 0">${esc(String(err && err.message || err))}</pre>
+      <pre class="mono small errpre">${esc(String(err && err.message || err))}</pre>
       <div class="btnrow"><button class="btn" data-act="export">Download backup</button><button class="btn ghost" data-act="tab" data-tab="home">Back to Home</button>
       <button class="btn danger" data-act="reset">Reset everything</button></div></div>` };
   }

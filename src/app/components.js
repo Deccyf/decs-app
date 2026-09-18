@@ -20,7 +20,7 @@ function backupCard(heading, note) {
     ${CRYPTO_OK ? `<div class="row"><div class="l"><b>PIN lock</b><small>${pinIsSet()
       ? 'On — everything on this device is encrypted, and the PIN is needed to open the app.'
       : 'Off — anyone who can unlock this phone can read your figures.'}</small></div>
-      <div class="btnrow" style="margin:0;justify-content:flex-end">${pinIsSet()
+      <div class="btnrow end">${pinIsSet()
         ? '<button class="btn ghost sm" data-act="changePin">Change</button><button class="btn danger sm" data-act="clearPin">Turn off</button>'
         : '<button class="btn sm" data-act="setPin">Set a PIN</button>'}</div></div>
     ${pinIsSet() ? '<div class="note">A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.</div>' : ''}` : ''}
@@ -93,7 +93,7 @@ function fixedList(p) {
 }
 function recent(n) {
   const list = S.games.filter(g => g.date).sort((a, b) => b.date.localeCompare(a.date)).slice(0, n);
-  return list.length ? `<div class="eyebrow" style="margin-top:12px">Recent completions</div>${list.map(g => `<div class="row"><div class="l"><b>${esc(g.game)}</b></div><span class="muted small">${esc(C.fmtD(g.date))}</span></div>`).join('')}` : '';
+  return list.length ? `<div class="eyebrow mt12">Recent completions</div>${list.map(g => `<div class="row"><div class="l"><b>${esc(g.game)}</b></div><span class="muted small">${esc(C.fmtD(g.date))}</span></div>`).join('')}` : '';
 }
 function tickList() {
   const q = ui.search.trim().toLowerCase();
