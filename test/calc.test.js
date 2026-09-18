@@ -468,3 +468,56 @@ test('the projection shows the card coming off without touching stored figures',
   assert.equal(m.balance, -611.26);
 });
 
+
+/* ----------------------------------------------------------- savings pots -- */
+const POTS = [
+  { id: '1', name: 'Emergency fund', balance: 1200, target: 3000, monthly: 150 },
+  { id: '2', name: 'Holiday', balance: 800, target: 800, monthly: 0 },
+  { id: '3', name: 'New telly', balance: 150, target: 900, monthly: 0 },
+  { id: '4', name: 'Rainy day', balance: 430, target: null, monthly: 25 }
+];
+
+test('pots total up and net off against debt', () => {
+  const r = C.potsCalc(POTS, [{ balance: 1850 }, { balance: 640 }], '2026-09-18');
+  assert.equal(r.total, 2580);
+  assert.equal(r.debtTotal, 2490);
+  assert.equal(r.net, 90, 'what would be left if everything were settled today');
+  assert.equal(r.totalMonthly, 175);
+  assert.equal(r.targeted, 3);
+  assert.equal(r.done, 1);
+});
+
+test('a target works out what is left and when it lands', () => {
+  const [emergency, holiday, telly, rainy] = C.potsCalc(POTS, [], '2026-09-18').list;
+  assert.equal(emergency.toGo, 1800);
+  assert.equal(emergency.months, 12, '£1,800 at £150 a month');
+  assert.equal(emergency.by, '2027-09-18');
+  assert.equal(emergency.done, false);
+
+  assert.equal(holiday.done, true, 'balance has reached the target');
+  assert.equal(holiday.toGo, 0);
+  assert.equal(holiday.pct, 1);
+
+  assert.equal(telly.stalled, true, 'a target with nothing going in never arrives');
+  assert.equal(telly.by, null, 'so no date is invented');
+  assert.equal(telly.months, null);
+
+  assert.equal(rainy.target, 0, 'no target set');
+  assert.deepEqual([rainy.toGo, rainy.pct, rainy.by], [null, null, null], 'and nothing is inferred from one');
+});
+
+test('a pot past its target does not report over 100 per cent', () => {
+  const [over] = C.potsCalc([{ name: 'Over', balance: 1200, target: 1000, monthly: 50 }], [], '2026-09-18').list;
+  assert.equal(over.pct, 1);
+  assert.equal(over.toGo, 0);
+  assert.equal(over.done, true);
+  assert.equal(over.months, null, 'nothing left to wait for');
+});
+
+test('pots cope with nothing in them', () => {
+  const empty = C.potsCalc([], [], '2026-09-18');
+  assert.deepEqual([empty.total, empty.net, empty.totalMonthly, empty.list.length], [0, 0, 0, 0]);
+  const blank = C.potsCalc([{ name: '' }], [], '2026-09-18');
+  assert.equal(blank.total, 0);
+  assert.equal(blank.list[0].balance, 0, 'a half-filled pot reads as zero rather than breaking');
+});

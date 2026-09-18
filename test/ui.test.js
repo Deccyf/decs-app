@@ -579,3 +579,59 @@ test('the Pay now button says what it is worth and what it does', skip, async t 
   assert.equal(await page.$$eval('#view input[disabled]', es => es.filter(e => /pay day/.test(e.value)).length), 0);
   assert.equal(await page.$$eval('[data-set="money.amexBefore"]', e => e.length), 1, 'the toggle still carries the timing');
 });
+
+test('savings pots add, show progress and remove', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.pots = [
+    { id: '1', name: 'Emergency fund', balance: 1200, target: 3000, monthly: 150 },
+    { id: '2', name: 'Holiday', balance: 800, target: 800, monthly: 0 }
+  ];
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  const card = async () => (await page.$$eval('#view .card', cs =>
+    cs.map(c => c.textContent.replace(/\s+/g, ' ')))).find(c => c.includes('Savings pots'));
+
+  let c = await card();
+  assert.match(c, /Put away.*£2,000\.00/, 'totals the pots');
+  assert.match(c, /£150\.00 a month going in/, 'only the emergency fund has a monthly going in');
+  assert.match(c, /Pots less debt.*£150\.00/, "£2,000 of pots against the sample's £1,850 card");
+  assert.match(c, /Emergency fund.*£1,800\.00 to go of £3,000.*there by Sep 2027/);
+  assert.match(c, /Holiday.*target of £800 reached/);
+
+  await page.click('[data-act="toggle"][data-key="editPots"]');
+  await page.waitForTimeout(250);
+  await page.click('[data-act="addPot"]');
+  await page.waitForTimeout(300);
+  await page.fill('[data-set="money.pots.2.name"]', 'New bike');
+  await page.dispatchEvent('[data-set="money.pots.2.name"]', 'change');
+  await page.waitForTimeout(250);
+  await page.fill('[data-set="money.pots.2.balance"]', '60');
+  await page.dispatchEvent('[data-set="money.pots.2.balance"]', 'change');
+  await page.waitForTimeout(300);
+  let stored = await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.pots);
+  assert.equal(stored.length, 3);
+  assert.equal(stored[2].name, 'New bike');
+  assert.equal(stored[2].balance, 60);
+  assert.ok(stored[2].id, 'given an id');
+
+  await page.click('[data-act="delPot"][data-i="2"]');
+  await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(350);
+  stored = await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.pots);
+  assert.equal(stored.length, 2, 'removed');
+  assert.deepEqual(stored.map(p => p.name), ['Emergency fund', 'Holiday']);
+});
+
+test('pots stay out of the cash flow', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: 1000, balanceOn: '2026-09-18', buffer: 0, overdraft: 0 });
+  data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 100, dueDay: 22, started: '2024-01' }];
+  data.money.pots = [];
+  const bare = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  const freeWithout = await bare.$eval('.flowhero .amt', e => e.textContent);
+
+  data.money.pots = [{ id: '1', name: 'Emergency fund', balance: 5000, target: 6000, monthly: 200 }];
+  const withPots = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  assert.equal(await withPots.$eval('.flowhero .amt', e => e.textContent), freeWithout,
+    'money already set aside is not money to spend before pay day');
+});

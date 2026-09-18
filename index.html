@@ -411,7 +411,7 @@ body.locked header,body.locked main,body.locked .tabs{display:none}
     <button type="button" class="locklink" data-act="forgotPin">Forgotten your PIN?</button>
   </form>
 </div>
-<script id="seed" type="application/json">{"version":2,"generic":true,"name":"Dec","money":{"buffer":1000,"overdraft":0,"amex":null,"amexBefore":false,"amexUndo":null,"balance":null,"balanceOn":null,"dueShift":"next","bankHols":true,"bills":[],"months":[],"debts":[]},"house":[],"classic":[],"mega":[],"psm":[],"games":[],"goals":"","pay":{"salary":null,"hoursWeek":35,"weeksYear":52.1667,"sundayRate":3.7,"nextPayDay":"2026-08-28","periodEndDays":6,"personalAllowance":12570,"taxCode":"1257L","fixed":[],"hours":{},"hpaHistory":{},"tax":{"basicRate":0.2,"basicBand":37700,"higherRate":0.4,"higherBand":125140,"addRate":0.45,"niPT":12570,"niUEL":50270,"niMain":0.08,"niUpper":0.02,"taxYearStart":"2026-04-06"}}}</script>
+<script id="seed" type="application/json">{"version":2,"generic":true,"name":"Dec","money":{"buffer":1000,"overdraft":0,"amex":null,"amexBefore":false,"amexUndo":null,"balance":null,"balanceOn":null,"dueShift":"next","bankHols":true,"bills":[],"months":[],"debts":[],"pots":[]},"house":[],"classic":[],"mega":[],"psm":[],"games":[],"goals":"","pay":{"salary":null,"hoursWeek":35,"weeksYear":52.1667,"sundayRate":3.7,"nextPayDay":"2026-08-28","periodEndDays":6,"personalAllowance":12570,"taxCode":"1257L","fixed":[],"hours":{},"hpaHistory":{},"tax":{"basicRate":0.2,"basicBand":37700,"higherRate":0.4,"higherBand":125140,"addRate":0.45,"niPT":12570,"niUEL":50270,"niMain":0.08,"niUpper":0.02,"taxYearStart":"2026-04-06"}}}</script>
 <script>
 /* ===== calc: pure functions, no DOM ===== */
 const C = (() => {
@@ -842,6 +842,31 @@ const C = (() => {
     return out;
   }
 
+  /* ---------- savings pots ----------
+     A pot is a balance you have put aside, optionally with something you are
+     saving towards and what you put in each month. Everything else follows from
+     those three numbers, so nothing needs keeping in step by hand. */
+  function potsCalc(pots, debts, tod) {
+    tod = tod || today();
+    const list = (pots || []).map(p => {
+      const balance = num(p.balance), target = num(p.target), monthly = num(p.monthly);
+      const toGo = target ? r2(Math.max(target - balance, 0)) : null;
+      const months = (toGo && monthly > 0) ? Math.ceil(toGo / monthly) : null;
+      return { ...p, balance, target, monthly, toGo,
+        pct: target ? Math.min(balance / target, 1) : null,
+        done: !!target && balance >= target,
+        months, by: months ? addMonths(tod, months) : null,
+        // a pot with a target but nothing going in is stuck where it is
+        stalled: !!target && balance < target && !monthly };
+    });
+    const total = r2(list.reduce((a, p) => a + p.balance, 0));
+    const debtTotal = r2((debts || []).reduce((a, d) => a + num(d.balance), 0));
+    return { list, total, debtTotal, net: r2(total - debtTotal),
+      totalMonthly: r2(list.reduce((a, p) => a + p.monthly, 0)),
+      targeted: list.filter(p => p.target).length,
+      done: list.filter(p => p.done).length };
+  }
+
   /* ---------- bill price history ----------
      Keeping history means one bill is several rows: the old amount with an
      "ended" month, then a new row starting the month after. Chain those rows
@@ -896,7 +921,7 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, priceHistory, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, priceHistory, potsCalc, collections, gamesStats, MON, DOW };
 })();
 
 /* ===== app: state, views, events ===== */
@@ -911,7 +936,7 @@ const $ = s => document.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 let S, storageOK = true, tab = 'home', theme = 'auto';
 const ui = { payday: null, openYears: {}, showAllMonths: false, editBills: false, editDebts: false, editFixed: false,
-  editJobs: false, showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
+  editJobs: false, editPots: false, showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
 
 const TABS = [
   { k: 'home', l: 'Home', d: 'M3 10.6 12 3.4l9 7.2M5.6 9.4V20a1 1 0 0 0 1 1h10.8a1 1 0 0 0 1-1V9.4' },
@@ -1000,7 +1025,7 @@ function normalize() {
   ['house', 'classic', 'mega', 'psm', 'games'].forEach(k => arr(S, k));
   obj(S, 'money'); obj(S, 'pay');
   const m = S.money;
-  ['bills', 'months', 'debts'].forEach(k => arr(m, k));
+  ['bills', 'months', 'debts', 'pots'].forEach(k => arr(m, k));
   if (m.buffer === undefined) m.buffer = 0;
   if (m.overdraft === undefined) m.overdraft = 0;
   if (m.amex === undefined) m.amex = null;
@@ -1014,6 +1039,7 @@ function normalize() {
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
   m.bills.forEach(b => { if (!b.id) b.id = uid(); if (b.dueDay === undefined) b.dueDay = null; });
   m.debts.forEach(d => { if (!d.id) d.id = uid(); });
+  m.pots.forEach(p => { if (!p.id) p.id = uid(); });
   m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
      Unsorted rows make "latest month" and the chart wrong; duplicates double
@@ -1499,6 +1525,27 @@ const VIEWS = {
         <div class="note">Built from the history you keep when a price changes. Edit a bill's amount and the app offers to keep the old one — that is what fills this in.</div></div>`;
     }
 
+    /* --- 4c. savings pots --- */
+    const pots = C.potsCalc(S.money.pots, S.money.debts);
+    h += `<div class="card"><h2>Savings pots${pots.list.length ? `<span class="hint">${pots.done ? pots.done + ' hit' : pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</span>` : ''}</h2>
+      <div class="row"><div class="l"><b>Put away</b><small>${pots.totalMonthly ? C.gbp(pots.totalMonthly) + ' a month going in' : 'across ' + pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</small></div><div class="strong num">${C.gbp(pots.total)}</div></div>
+      ${pots.debtTotal ? `<div class="row"><div class="l"><b>Pots less debt</b><small>what you would have if you cleared everything today</small></div>
+        <div class="strong num ${pots.net < 0 ? 'neg' : 'pos'}">${C.gbp(pots.net)}</div></div>` : ''}
+      ${ui.editPots ? S.money.pots.map((p, i) => `<div class="erow"><div class="full">${field('Pot', inp(`money.pots.${i}.name`, p.name, 'text'))}</div>
+          ${field('Balance', inp(`money.pots.${i}.balance`, p.balance))}${field('Saving towards (optional)', inp(`money.pots.${i}.target`, p.target, 'number', 'placeholder="none"'))}
+          ${field('Going in each month', inp(`money.pots.${i}.monthly`, p.monthly, 'number', 'placeholder="0"'))}
+          <div class="full"><button class="btn danger sm" data-act="delPot" data-i="${i}">Remove ${esc(p.name || 'pot')}</button></div></div>`).join('') || '<div class="empty">No pots yet.</div>'
+        : pots.list.map(p => `<div class="prow"><div><b>${esc(p.name || 'Pot')}</b>
+            <small class="meta">${p.target
+              ? (p.done ? 'target of ' + C.gbp(p.target, 0) + ' reached'
+                : C.gbp(p.toGo) + ' to go of ' + C.gbp(p.target, 0)
+                  + (p.by ? ' · there by ' + esc(C.fmtM(C.mkey(p.by))) : p.stalled ? ' · nothing going in' : ''))
+              : (p.monthly ? C.gbp(p.monthly) + ' a month, no target set' : 'no target set')}</small></div>
+          <div class="num" style="text-align:right"><b>${C.gbp(p.balance)}</b>${p.target ? `<div class="muted small">${C.pct(p.pct)}</div>` : ''}</div>
+          ${p.target ? `<div class="pb">${bar(p.pct, p.done ? '' : 'teal')}</div>` : ''}</div>`).join('') || '<div class="empty">No pots yet. Add one to track what you are putting aside.</div>'}
+      <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editPots">${ui.editPots ? 'Done' : 'Edit pots'}</button>${ui.editPots ? '<button class="btn sm" data-act="addPot">Add pot</button>' : ''}</div>
+      <div class="note">Pots sit outside the cash flow above — money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account. Put what goes in each month against a pot and it works out when you will get there.</div></div>`;
+
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>
       ${ui.editDebts ? m.debts.map((d, i) => `<div class="erow">${field('Debt', inp(`money.debts.${i}.name`, d.name, 'text'))}${field('Type', sel(`money.debts.${i}.type`, d.type, ['Short-term', 'Long-term']))}
@@ -1750,6 +1797,8 @@ document.addEventListener('click', async e => {
   if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit(); return; }
   if (a === 'delBill') { if (await confirmDlg('Remove this bill?', esc(S.money.bills[+d.i].name || ''))) { S.money.bills.splice(+d.i, 1); commit(); } return; }
   if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(); toast('Added ' + C.fmtM(k)); } return; }
+  if (a === 'addPot') { S.money.pots.push({ id: uid(), name: '', balance: null, target: null, monthly: null }); ui.editPots = true; commit(); return; }
+  if (a === 'delPot') { if (await confirmDlg('Remove this pot?', esc(S.money.pots[+d.i].name || ''))) { S.money.pots.splice(+d.i, 1); commit(); } return; }
   if (a === 'addDebt') { S.money.debts.push({ id: uid(), name: '', type: 'Short-term', balance: null, repayment: null, apr: null, notes: '' }); commit(); return; }
   if (a === 'delDebt') { if (await confirmDlg('Remove this debt?', esc(S.money.debts[+d.i].name || ''))) { S.money.debts.splice(+d.i, 1); commit(); } return; }
   if (a === 'addYear') { const Y = S.pay.taxYears, last = Y[Y.length - 1];
