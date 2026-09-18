@@ -965,3 +965,29 @@ test('the AMEX undo and the general undo agree', skip, async t => {
   assert.equal(m.amexUndo, null, 'and the card\'s own undo is not left dangling');
   assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0);
 });
+
+test('the highlighted pay day lines up with every other row', skip, async t => {
+  const page = await open(t, { tab: 'pay' });
+  const rows = await page.$$eval('.board .brow', rs => rs.map(r => ({
+    next: r.classList.contains('nextpd'),
+    left: Math.round(r.getBoundingClientRect().left), right: Math.round(r.getBoundingClientRect().right),
+    date: Math.round(r.querySelector('.bl').getBoundingClientRect().left),
+    hours: Math.round(r.querySelector('.h').getBoundingClientRect().left),
+    amount: Math.round(r.querySelector('.n').getBoundingClientRect().right)
+  })));
+  assert.ok(rows.length > 3, 'the board has rows');
+  const hot = rows.filter(r => r.next);
+  assert.equal(hot.length, 1, 'exactly one next pay day');
+  const plain = rows.find(r => !r.next);
+
+  // the three columns must start and end in the same place on every row
+  rows.forEach(r => {
+    assert.equal(r.date, plain.date, 'date column');
+    assert.equal(r.hours, plain.hours, 'hours column');
+    assert.equal(r.amount, plain.amount, 'amount column');
+  });
+  // and the highlight bleeds the same distance either side rather than sliding across
+  const bleedL = plain.left - hot[0].left, bleedR = hot[0].right - plain.right;
+  assert.ok(bleedL > 0, 'the highlight reaches past the row on the left');
+  assert.equal(bleedL, bleedR, 'by the same amount on the right');
+});
