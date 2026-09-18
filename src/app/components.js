@@ -87,6 +87,7 @@ function aboutCard() {
   return `<div class="card"><h2>About</h2>
     <div class="row"><div class="l"><b>${esc(document.title)}</b><small>${storageOK ? 'Saving on this device.' : 'Not saving on this device.'}${pinIsSet() ? ' Encrypted.' : ''}</small></div></div>
     <div class="row"><div class="l"><b>On this device</b><small>${counts || 'Nothing yet — restore a backup or start typing.'}</small></div></div>
+    <div class="row"><div class="l"><b>Undo</b><small>The arrow in the header takes back the last change — a removed bill, a mistyped figure, even a reset — up to ${UNDO_MAX} steps, until the app is closed. Ctrl+Z on a keyboard.</small></div></div>
     <div class="note">Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Payslip settings each April.</div></div>`;
 }
 function backupCard(heading, note) {

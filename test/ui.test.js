@@ -804,3 +804,164 @@ test('Home stays quiet when nothing needs a look', skip, async t => {
   const tall = await page.evaluate(() => document.documentElement.scrollHeight);
   assert.ok(tall < 874 * 2.2, `Home is ${(tall / 874).toFixed(1)} screens`);
 });
+
+/* ---------- general undo ---------- */
+const stored = page => page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')));
+
+test('removing a bill can be undone from the toast, and redone', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money', sec: 'bills' });
+  assert.ok(await page.$eval('#undoBtn', e => e.hidden), 'nothing to undo at the start');
+
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  await page.click('[data-act="delBill"][data-i="1"]'); await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
+  let s = await stored(page);
+  assert.deepEqual(s.money.bills.map(b => b.name), ['Rent', 'Energy'], 'Council Tax gone');
+  assert.match(await page.$eval('#toast', e => e.textContent), /Removed Council Tax/);
+  assert.ok(await page.$eval('#toast', e => e.classList.contains('show') && !!e.querySelector('button[data-act="undo"]')),
+    'the toast carries an Undo');
+  assert.ok(await page.$eval('#undoBtn', e => !e.hidden), 'and the header shows the arrow');
+  assert.equal(await page.$eval('#undoBtn', e => e.getAttribute('aria-label')), 'Undo removing Council Tax');
+
+  await page.click('#toast button[data-act="undo"]'); await page.waitForTimeout(350);
+  s = await stored(page);
+  assert.deepEqual(s.money.bills, SAMPLE.money.bills, 'the bill is back exactly as it was, in its place');
+  assert.match(await page.$eval('#toast', e => e.textContent), /Undone: removing Council Tax/);
+  assert.ok(await page.$('#toast button[data-act="redo"]'), 'with a Redo');
+  assert.ok(await page.$eval('#undoBtn', e => e.hidden), 'nothing left to undo');
+  assert.equal(await page.$$eval('#view .erow', e => e.length), 3, 'the edit list shows all three again');
+
+  await page.click('#toast button[data-act="redo"]'); await page.waitForTimeout(350);
+  s = await stored(page);
+  assert.deepEqual(s.money.bills.map(b => b.name), ['Rent', 'Energy'], 'redo removes it again');
+  assert.ok(await page.$eval('#undoBtn', e => !e.hidden));
+});
+
+test('the header arrow walks back through edits, and a new change clears redo', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  await page.fill('[data-set="money.buffer"]', '450');
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(250);
+  await page.fill('[data-set="money.overdraft"]', '500');
+  await page.dispatchEvent('[data-set="money.overdraft"]', 'change'); await page.waitForTimeout(250);
+  let s = await stored(page);
+  assert.equal(s.money.buffer, 450); assert.equal(s.money.overdraft, 500);
+  assert.equal(await page.$eval('#undoBtn', e => e.title), 'Undo changing Overdraft limit', 'named after the field');
+
+  await page.click('#undoBtn'); await page.waitForTimeout(350);
+  s = await stored(page);
+  assert.equal(s.money.overdraft, 0, 'the last edit first');
+  assert.equal(s.money.buffer, 450, 'the one before it stays');
+  assert.equal(await page.$eval('[data-set="money.overdraft"]', e => e.value), '0', 'the field shows it');
+  assert.equal(await page.$eval('#undoBtn', e => e.title), 'Undo changing Buffer to keep back');
+
+  await page.click('#undoBtn'); await page.waitForTimeout(350);
+  s = await stored(page);
+  assert.equal(s.money.buffer, 300, 'back to the start');
+  assert.ok(await page.$eval('#undoBtn', e => e.hidden));
+
+  // redo is there, until something new happens
+  await page.keyboard.press('Control+Shift+z'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).money.buffer, 450, 'Ctrl+Shift+Z redoes');
+  await page.fill('[data-set="money.buffer"]', '475');
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(250);
+  await page.keyboard.press('Control+Shift+z'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).money.buffer, 475, 'a new edit throws the old redo away');
+});
+
+test('Ctrl+Z undoes outside a field and is left to the browser inside one', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money', sec: 'saving' });
+  await page.click('[data-act="toggle"][data-key="editDebts"]'); await page.waitForTimeout(250);
+  await page.click('[data-act="delDebt"][data-i="0"]'); await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).money.debts.length, 0, 'debt removed');
+
+  await page.click('[data-act="toggle"][data-key="editPots"]'); await page.waitForTimeout(250);
+  await page.click('[data-act="addPot"]'); await page.waitForTimeout(300);
+  await page.focus('[data-set="money.pots.0.name"]');
+  await page.keyboard.press('Control+z'); await page.waitForTimeout(300);
+  let s = await stored(page);
+  assert.equal(s.money.pots.length, 1, 'inside a text field Ctrl+Z is not the app\'s');
+  assert.equal(s.money.debts.length, 0);
+
+  await page.evaluate(() => document.activeElement.blur());
+  await page.keyboard.press('Control+z'); await page.waitForTimeout(350);
+  s = await stored(page);
+  assert.equal(s.money.pots.length, 0, 'the added pot goes first');
+  await page.keyboard.press('Control+z'); await page.waitForTimeout(350);
+  s = await stored(page);
+  assert.equal(s.money.debts.length, 1, 'then the removed debt comes back');
+  assert.equal(s.money.debts[0].name, 'Card');
+});
+
+test('a reset and a restored backup can both be undone', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)) });
+  await page.click('#settingsBtn'); await page.waitForTimeout(250);
+  await page.click('[data-act="reset"]'); await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(400);
+  let s = await stored(page);
+  assert.equal(s.money.bills.length, 0, 'cleared');
+  assert.ok(await page.$('#toast button[data-act="undo"]'), 'the reset toast offers Undo');
+  await page.click('#toast button[data-act="undo"]'); await page.waitForTimeout(400);
+  s = await stored(page);
+  assert.equal(s.money.bills.length, 3, 'everything back');
+  assert.equal(s.games[0].game, 'DOOM 64');
+
+  const other = JSON.parse(JSON.stringify(SAMPLE));
+  other.money.bills = [{ id: '9', name: 'Gym', category: 'Other', amount: 30, dueDay: 5, started: '2024-01' }];
+  await page.setInputFiles('#importFile', { name: 'b.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(other)) });
+  await page.waitForTimeout(500);
+  s = await stored(page);
+  assert.deepEqual(s.money.bills.map(b => b.name), ['Gym'], 'restored over the top');
+  assert.match(await page.$eval('#toast', e => e.textContent), /Backup restored/);
+  await page.click('#toast button[data-act="undo"]'); await page.waitForTimeout(400);
+  s = await stored(page);
+  assert.deepEqual(s.money.bills.map(b => b.name), ['Rent', 'Council Tax', 'Energy'], 'and the wrong file is undone');
+});
+
+test('undo goes back to where the change was made', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'games' });
+  await page.click('[data-act="delGame"][data-id="g1"]'); await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).games.length, 0);
+  await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(250);
+  assert.equal(await page.$eval('#title', e => e.textContent), "Dec's Tracker", 'on Home');
+  await page.click('#undoBtn'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).games.length, 1, 'game back');
+  assert.equal(await page.$eval('#title', e => e.textContent), 'Games', 'shown where it came back');
+  assert.match(await page.$eval('#view', e => e.textContent), /DOOM 64/);
+});
+
+test('the history lives in memory only', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'lists' });
+  await page.click('[data-act="tick"]'); await page.waitForTimeout(300);
+  assert.equal((await stored(page)).classic[0].have, false, 'unticked');
+  assert.ok(await page.$eval('#undoBtn', e => !e.hidden));
+  assert.deepEqual(await page.evaluate(() => Object.keys(localStorage).sort()), ['decs-stuff-v1'], 'nothing else is written');
+  await page.reload(); await page.waitForSelector('#view .card', { timeout: 5000 });
+  assert.ok(await page.$eval('#undoBtn', e => e.hidden), 'a fresh load starts with nothing to undo');
+  assert.equal((await stored(page)).classic[0].have, false, 'the change itself was saved');
+});
+
+test('a no-op change leaves nothing to undo', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  await page.fill('[data-set="money.buffer"]', '300');                 // same as before
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(250);
+  assert.ok(await page.$eval('#undoBtn', e => e.hidden));
+  await page.keyboard.press('Control+z'); await page.waitForTimeout(250);
+  assert.equal((await stored(page)).money.buffer, 300);
+});
+
+test('the AMEX undo and the general undo agree', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.money, { balance: 1000, balanceOn: '2026-09-09', amex: 250, amexBefore: false, amexUndo: null });
+  const page = await open(t, { data, tab: 'money' });
+  await page.click('[data-act="amexClear"]'); await page.waitForTimeout(400);
+  let m = (await stored(page)).money;
+  assert.equal(m.balance, 750); assert.equal(m.amex, 0); assert.ok(m.amexUndo);
+  await page.click('#undoBtn'); await page.waitForTimeout(400);
+  m = (await stored(page)).money;
+  assert.equal(m.balance, 1000, 'general undo reverses Pay now');
+  assert.equal(m.amex, 250);
+  assert.equal(m.amexUndo, null, 'and the card\'s own undo is not left dangling');
+  assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0);
+});

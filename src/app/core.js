@@ -75,9 +75,9 @@ function load() {
 /* Encryption is async, so writes are queued rather than fired off in parallel —
    the snapshot is taken synchronously so they still land in the right order. */
 let saveChain = Promise.resolve();
-function save() {
+function save(json) {
   if (!storageOK) return saveChain;
-  const snapshot = JSON.stringify(S);
+  const snapshot = json || JSON.stringify(S);
   saveChain = saveChain.then(async () => {
     try { localStorage.setItem(KEY, cryptoKey ? await sealText(snapshot) : snapshot); }
     catch (e) { storageOK = false; toast('Could not save on this device'); }
@@ -155,13 +155,58 @@ function setPath(o, p, v) {
    under a focus move that then landed on a detached element. Deferring lets
    the move finish, and the redraw then finds and keeps the new field. */
 let renderQueued = false;
-function commit() {
-  save();
+function commit(label) {
+  const json = historyPush(label);
+  save(json);
   if (renderQueued) return;
   renderQueued = true;
   setTimeout(() => { renderQueued = false; render(); }, 0);
 }
-let toastT; function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2000); }
+/* A toast can carry one action — "Removed Rent · Undo" — which stays up long
+   enough to reach for. */
+let toastT;
+function toast(m, action) {
+  const t = $('#toast');
+  t.innerHTML = `<span>${esc(m)}</span>${action ? `<button type="button" data-act="${esc(action.act)}">${esc(action.label)}</button>` : ''}`;
+  t.classList.add('show');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => t.classList.remove('show'), action ? 6000 : 2000);
+}
+const UNDO = { label: 'Undo', act: 'undo' };
+
+/* ---------- undo ----------
+   Every change goes through commit(), so that is the one place to remember what
+   the data looked like a moment before. Undo puts that whole picture back — a
+   removed bill, a mistyped balance, a reset, a backup restored over the top —
+   and redo takes it forward again. The history is a short list of snapshots
+   kept in memory: it is gone when the app is closed, and none of it is ever
+   written to the device, so a PIN-locked app leaves no unencrypted trail. */
+const UNDO_MAX = 40;
+const hist = { past: [], future: [], mark: null };
+function historyMark() { hist.mark = JSON.stringify(S); }
+function historyPush(label) {
+  const now = JSON.stringify(S);
+  if (hist.mark !== null && now !== hist.mark) {
+    hist.past.push({ json: hist.mark, label: label || 'the last change', tab, sec: ui.moneyTab });
+    if (hist.past.length > UNDO_MAX) hist.past.shift();
+    hist.future = [];
+  }
+  hist.mark = now;
+  return now;
+}
+function historyStep(from, to) {
+  const e = from.pop();
+  if (!e) return null;
+  to.push({ json: JSON.stringify(S), label: e.label, tab: e.tab, sec: e.sec });
+  S = JSON.parse(e.json); normalize();
+  historyMark();
+  save(hist.mark);
+  tab = e.tab; if (e.sec) ui.moneyTab = e.sec;      // show the thing that just came back
+  render();
+  return e;
+}
+function undo() { const e = historyStep(hist.past, hist.future); if (e) toast(`Undone: ${e.label}`, { label: 'Redo', act: 'redo' }); }
+function redo() { const e = historyStep(hist.future, hist.past); if (e) toast(`Redone: ${e.label}`, UNDO); }
 
 /* ---------- theme ---------- */
 function applyTheme() {

@@ -25,3 +25,8 @@ build.
 
 The localStorage key is `decs-stuff-v1` and must stay that way: renaming it
 would orphan every figure already saved on a phone.
+
+Undo is general: `commit()` snapshots the state before each change, and the
+arrow in the header (or Ctrl+Z; Ctrl+Shift+Z to redo) puts the previous
+snapshot back whole. The history is in memory only and is never written to the
+device, so a PIN-locked app leaves no unencrypted trail.

@@ -41,6 +41,10 @@ function render(keepScroll = true) {
     b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
   $('#settingsBtn').classList.toggle('on', tab === 'settings');
+  const u = $('#undoBtn'), last = hist.past[hist.past.length - 1];
+  u.hidden = !last;
+  u.setAttribute('aria-label', last ? `Undo ${last.label}` : 'Undo');
+  u.title = last ? `Undo ${last.label}` : '';
   chartData = v.chart || null;
   drawChart();
   window.scrollTo(0, keepScroll ? y : 0);
@@ -62,9 +66,11 @@ document.addEventListener('click', async e => {
   if (a === 'theme') { setTheme(d.v); return; }
   if (a === 'pick') { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; render(false); return; }
   if (a === 'yeartoggle') { ui.openYears[d.y] = !ui.openYears[d.y]; render(); return; }
-  if (a === 'hstep') { const h = S.pay.hours[d.payday] = S.pay.hours[d.payday] || {}; h[d.kind] = Math.max(0, C.num(h[d.kind]) + (+d.d)); if (!h.ot && !h.sun) delete S.pay.hours[d.payday]; commit(); return; }
+  if (a === 'undo') { undo(); return; }
+  if (a === 'redo') { redo(); return; }
+  if (a === 'hstep') { const h = S.pay.hours[d.payday] = S.pay.hours[d.payday] || {}; h[d.kind] = Math.max(0, C.num(h[d.kind]) + (+d.d)); if (!h.ot && !h.sun) delete S.pay.hours[d.payday]; commit('the hours'); return; }
   if (a === 'toggle') { ui[d.key] = !ui[d.key]; render(); return; }
-  if (a === 'shift') { S.money.dueShift = d.v; commit(); return; }
+  if (a === 'shift') { S.money.dueShift = d.v; commit('the due-date setting'); return; }
   if (a === 'sign') {
     const wrap = t.closest('.signed'), el = wrap && wrap.querySelector('input');
     if (!el) return;
@@ -72,36 +78,36 @@ document.addEventListener('click', async e => {
     if (raw === '' || isNaN(parseFloat(raw))) { el.focus(); toast('Type the amount first, then tap ±'); return; }
     setPath(S, el.dataset.set, -parseFloat(raw));
     if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); S.money.amexUndo = null; }
-    commit(); return;
+    commit('flipping the sign'); return;
   }
   if (a === 'morePeriods') { ui.flowPeriods = ui.flowPeriods >= 12 ? 4 : ui.flowPeriods + 4; render(); return; }
   if (a === 'set') { ui.set = d.set; ui.search = ''; render(); return; }
-  if (a === 'tick') { const it = S[d.col][+d.i]; it.have = !it.have; commit(); return; }
-  if (a === 'psm') { const it = S.psm[+d.i]; it[d.k] = !it[d.k]; commit(); return; }
+  if (a === 'tick') { const it = S[d.col][+d.i]; it.have = !it.have; commit(`${it.have ? 'ticking' : 'unticking'} ${it.card}`); return; }
+  if (a === 'psm') { const it = S.psm[+d.i]; it[d.k] = !it[d.k]; commit('the magazine tick'); return; }
   if (a === 'grade') { const it = S[d.col][+d.i];
     const g = await dialog({ title: 'Grade', body: esc(it.card), ok: 'Save', input: it.grade || '' });
-    if (g === null) return; it.grade = g; commit(); return; }
-  if (a === 'cycle') { const j = S.house[+d.i]; const order = ['To do', 'In progress', 'Done']; j.status = order[(order.indexOf(j.status) + 1) % 3]; if (j.status === 'Done' && !j.dateDone) j.dateDone = C.today(); if (j.status === 'To do') j.dateDone = null; commit(); return; }
-  if (a === 'addJob') { S.house.push({ id: uid(), job: '', status: 'To do', dateDone: null, notes: '' }); ui.editJobs = true; commit(); return; }
-  if (a === 'delJob') { if (await confirmDlg('Remove this job?', esc(S.house[+d.i].job || ''))) { S.house.splice(+d.i, 1); commit(); } return; }
-  if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit(); return; }
-  if (a === 'delBill') { if (await confirmDlg('Remove this bill?', esc(S.money.bills[+d.i].name || ''))) { S.money.bills.splice(+d.i, 1); commit(); } return; }
-  if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(); toast('Added ' + C.fmtM(k)); } return; }
-  if (a === 'addPot') { S.money.pots.push({ id: uid(), name: '', balance: null, target: null, monthly: null }); ui.editPots = true; commit(); return; }
-  if (a === 'delPot') { if (await confirmDlg('Remove this pot?', esc(S.money.pots[+d.i].name || ''))) { S.money.pots.splice(+d.i, 1); commit(); } return; }
-  if (a === 'addDebt') { S.money.debts.push({ id: uid(), name: '', type: 'Short-term', balance: null, repayment: null, apr: null, notes: '' }); commit(); return; }
-  if (a === 'delDebt') { if (await confirmDlg('Remove this debt?', esc(S.money.debts[+d.i].name || ''))) { S.money.debts.splice(+d.i, 1); commit(); } return; }
+    if (g === null) return; it.grade = g; commit(`grading ${it.card}`); return; }
+  if (a === 'cycle') { const j = S.house[+d.i]; const order = ['To do', 'In progress', 'Done']; j.status = order[(order.indexOf(j.status) + 1) % 3]; if (j.status === 'Done' && !j.dateDone) j.dateDone = C.today(); if (j.status === 'To do') j.dateDone = null; commit(`moving ${j.job || 'a job'} to ${j.status}`); return; }
+  if (a === 'addJob') { S.house.push({ id: uid(), job: '', status: 'To do', dateDone: null, notes: '' }); ui.editJobs = true; commit('adding a job'); return; }
+  if (a === 'delJob') { const j = S.house[+d.i]; if (await confirmDlg('Remove this job?', esc(j.job || ''))) { drop(S.house, j); removed(j.job || 'a job'); } return; }
+  if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit('adding a bill'); return; }
+  if (a === 'delBill') { const b = S.money.bills[+d.i]; if (await confirmDlg('Remove this bill?', esc(b.name || ''))) { drop(S.money.bills, b); removed(b.name || 'a bill'); } return; }
+  if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(`adding ${C.fmtM(k)}`); toast('Added ' + C.fmtM(k)); } return; }
+  if (a === 'addPot') { S.money.pots.push({ id: uid(), name: '', balance: null, target: null, monthly: null }); ui.editPots = true; commit('adding a pot'); return; }
+  if (a === 'delPot') { const p = S.money.pots[+d.i]; if (await confirmDlg('Remove this pot?', esc(p.name || ''))) { drop(S.money.pots, p); removed(p.name || 'a pot'); } return; }
+  if (a === 'addDebt') { S.money.debts.push({ id: uid(), name: '', type: 'Short-term', balance: null, repayment: null, apr: null, notes: '' }); commit('adding a debt'); return; }
+  if (a === 'delDebt') { const x = S.money.debts[+d.i]; if (await confirmDlg('Remove this debt?', esc(x.name || ''))) { drop(S.money.debts, x); removed(x.name || 'a debt'); } return; }
   if (a === 'addYear') { const Y = S.pay.taxYears, last = Y[Y.length - 1];
-    Y.push(Object.assign({}, last, { from: (+String(last.from).slice(0, 4) + 1) + '-04-06' })); commit(); return; }
-  if (a === 'delYear') { if (S.pay.taxYears.length > 1) S.pay.taxYears.splice(+d.i, 1); commit(); return; }
-  if (a === 'addRise') { S.pay.rises.push({ from: '', salary: null, arrearsOn: '', otBackpay: true }); commit(); return; }
-  if (a === 'delRise') { S.pay.rises.splice(+d.i, 1); commit(); return; }
-  if (a === 'addFixed') { S.pay.fixed.push({ name: '', amount: null, treatment: 'After-tax', from: '', to: '' }); ui.editFixed = true; commit(); return; }
-  if (a === 'delFixed') { S.pay.fixed.splice(+d.i, 1); commit(); return; }
+    Y.push(Object.assign({}, last, { from: (+String(last.from).slice(0, 4) + 1) + '-04-06' })); commit('adding a tax year'); return; }
+  if (a === 'delYear') { if (S.pay.taxYears.length > 1) { S.pay.taxYears.splice(+d.i, 1); removed('a tax year'); } return; }
+  if (a === 'addRise') { S.pay.rises.push({ from: '', salary: null, arrearsOn: '', otBackpay: true }); commit('adding a pay change'); return; }
+  if (a === 'delRise') { S.pay.rises.splice(+d.i, 1); removed('a pay change'); return; }
+  if (a === 'addFixed') { S.pay.fixed.push({ name: '', amount: null, treatment: 'After-tax', from: '', to: '' }); ui.editFixed = true; commit('adding an item'); return; }
+  if (a === 'delFixed') { const f = S.pay.fixed[+d.i]; S.pay.fixed.splice(+d.i, 1); removed(f && f.name || 'an item'); return; }
   if (a === 'addGame') { const n = $('#g_name').value.trim(); if (!n) { toast('Type the game first'); $('#g_name').focus(); return; }
-    S.games.push({ id: uid(), game: n, date: $('#g_date').value || null, notes: $('#g_notes').value.trim() }); commit(); toast('Added to log'); return; }
+    S.games.push({ id: uid(), game: n, date: $('#g_date').value || null, notes: $('#g_notes').value.trim() }); commit(`adding ${n}`); toast('Added to log'); return; }
   if (a === 'delGame') { const g = S.games.find(x => x.id === d.id);
-    if (await confirmDlg('Remove from the log?', esc(g ? g.game : ''))) { S.games = S.games.filter(x => x.id !== d.id); commit(); } return; }
+    if (await confirmDlg('Remove from the log?', esc(g ? g.game : ''))) { S.games = S.games.filter(x => x.id !== d.id); removed(g ? g.game : 'a game'); } return; }
   if (a === 'amexClear') {
     const amt = Math.abs(C.num(S.money.amex));
     if (!amt) { toast('No card balance to clear'); return; }
@@ -110,7 +116,7 @@ document.addEventListener('click', async e => {
     S.money.balance = C.r2(C.num(S.money.balance) - amt);
     S.money.balanceOn = C.today();
     S.money.amex = 0;
-    commit();
+    commit('paying the card');
     toast(`${C.gbp(amt)} off your balance — undo is right there`);
     return;
   }
@@ -119,7 +125,7 @@ document.addEventListener('click', async e => {
     if (!u) return;
     S.money.balance = u.balance; S.money.balanceOn = u.balanceOn; S.money.amex = u.amex;
     S.money.amexUndo = null;
-    commit();
+    commit('putting the card back');
     toast('Put back');
     return;
   }
@@ -140,24 +146,44 @@ document.addEventListener('click', async e => {
   if (a === 'copy') { (navigator.clipboard ? navigator.clipboard.writeText(JSON.stringify(S)) : Promise.reject()).then(() => toast('Backup copied — paste it somewhere safe'), () => toast('Copy not available here')); return; }
   if (a === 'reset') { if (await confirmDlg(SEED.generic ? 'Clear everything on this device?' : 'Reset to the spreadsheet data?',
       SEED.generic ? 'Restore a backup to get it back.' : 'Your changes on this device will be lost.', 'Yes, clear it')) {
-      S = clone(SEED); normalize(); commit(); toast(SEED.generic ? 'Cleared' : 'Reset to spreadsheet data'); } return; }
+      S = clone(SEED); normalize(); commit('the reset'); toast(SEED.generic ? 'Cleared' : 'Reset to spreadsheet data', UNDO); } return; }
 });
+/* Something has just gone: say so, with the way back right there. */
+function removed(what) { commit(`removing ${what}`); toast(`Removed ${what}`, UNDO); }
+/* By identity, not index: a confirm dialog can sit open while the list changes under it. */
+function drop(list, item) { const i = list.indexOf(item); if (i >= 0) list.splice(i, 1); }
+/* What a field is called, for "Undo changing Buffer to keep back". */
+function fieldLabel(el) {
+  const f = el.closest('.field, .switch, label'), l = f && f.querySelector('label, .sl b, b');
+  const txt = (l && l.textContent || el.getAttribute('aria-label') || '').trim();
+  return txt ? `changing ${txt}` : 'the last edit';
+}
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'importFile') { if (el.files[0]) importBackup(el.files[0]); el.value = ''; return; }
-  if (el.dataset.hours) { const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.num(el.value)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit(); return; }
+  if (el.dataset.hours) { const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.num(el.value)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit('the hours'); return; }
   const amt = el.dataset.set && el.dataset.set.match(/^money\.bills\.(\d+)\.amount$/);
   if (amt) { billAmountChanged(+amt[1], parseInput(el)); return; }
   if (el.dataset.set) {
     setPath(S, el.dataset.set, parseInput(el));
     if (el.dataset.set === 'money.balance') S.money.balanceOn = C.today();   // stamp it so a stale figure is obvious
     if (el.dataset.set === 'money.balance' || el.dataset.set === 'money.amex') S.money.amexUndo = null;
-    commit();
+    commit(fieldLabel(el));
   }
 });
 document.addEventListener('input', e => { if (e.target.id === 'search') { ui.search = e.target.value; const l = $('#ticklist'); if (l) l.innerHTML = tickList(); } });
 document.addEventListener('toggle', e => { if (e.target.dataset && e.target.dataset.key) ui.open[e.target.dataset.key] = e.target.open; }, true);
-document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'g_name') { e.preventDefault(); $('#g_notes').focus(); } });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.id === 'g_name') { e.preventDefault(); $('#g_notes').focus(); return; }
+  // Ctrl/Cmd+Z undoes, with Shift (or Ctrl+Y) redoes — but inside a field that is the browser's to handle
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zyZY]$/.test(e.key)) {
+    if (!S || $('#dlg').open || typing(e.target)) return;
+    e.preventDefault();
+    if (e.key.toLowerCase() === 'y' || e.shiftKey) redo(); else undo();
+  }
+});
+const typing = el => !!el && (el.isContentEditable || el.tagName === 'TEXTAREA'
+  || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'range'].includes(el.type)));
 addEventListener('scroll', () => { $('#hdr').classList.toggle('stuck', window.scrollY > 4); }, { passive: true });
 let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawChart, 150); });
 /* Left open overnight, or resumed from the background, the figures would still
@@ -185,7 +211,7 @@ async function billAmountChanged(i, next) {
   const prev = C.num(b.amount), thisMonth = C.mkey(C.today());
   const worthKeeping = prev && next !== null && C.r2(next) !== C.r2(prev)
     && b.started && b.started < thisMonth && !b.ended && !b.link;
-  if (!worthKeeping) { b.amount = next; commit(); return; }
+  if (!worthKeeping) { b.amount = next; commit(`changing ${b.name || 'a bill'}`); return; }
   const up = next > prev, diff = Math.abs(C.r2(next - prev));
   const keep = await dialog({
     title: `${b.name || 'That bill'} ${up ? 'has gone up' : 'has come down'}`,
@@ -201,7 +227,7 @@ async function billAmountChanged(i, next) {
   } else {
     b.amount = next;
   }
-  commit();
+  commit(`the ${b.name || 'bill'} price change`);
 }
 
 /* ---------- backup ---------- */
@@ -216,7 +242,7 @@ function importBackup(file) {
     try {
       const o = JSON.parse(rd.result);
       if (!o || typeof o !== 'object' || !o.pay || !o.money) throw new Error('not a backup');
-      S = o; normalize(); commit(); toast('Backup restored');
+      S = o; normalize(); commit('restoring the backup'); toast('Backup restored', UNDO);
     } catch (e) { toast("That file isn't a backup from this app"); }
   };
   rd.onerror = () => toast("Couldn't read that file");
@@ -246,6 +272,7 @@ function importBackup(file) {
   }
   normalize();
   save();
+  historyMark();                                       // undo starts from here
   if (PAY_ONLY) { tab = 'pay'; $('#tabs').style.display = 'none'; document.body.classList.add('notabs'); }
   lastDay = C.today();
   render(false);
