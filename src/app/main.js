@@ -33,7 +33,8 @@ document.addEventListener('click', async e => {
   const t = e.target.closest('[data-act]'); if (!t) return;
   const a = t.dataset.act, d = t.dataset;
   if (!S && a !== 'forgotPin') return;                 // still locked; nothing to act on
-  if (a === 'tab') { tab = d.tab; render(false); return; }
+  if (a === 'tab') { tab = d.tab; if (d.sec) ui.moneyTab = d.sec; render(false); return; }
+  if (a === 'moneyTab') { ui.moneyTab = d.v; render(false); return; }
   if (a === 'theme') { cycleTheme(); return; }
   if (a === 'pick') { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; render(false); return; }
   if (a === 'yeartoggle') { ui.openYears[d.y] = !ui.openYears[d.y]; render(); return; }

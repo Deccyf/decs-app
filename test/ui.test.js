@@ -52,7 +52,7 @@ const freeze = iso => `(() => { const R = Date, F = new R('${iso}T09:00:00Z').ge
   class D extends R { constructor(...a){ a.length ? super(...a) : super(F); } static now(){ return F; } }
   window.Date = D; })();`;
 
-async function open(t, { on = '2026-09-09', data = SAMPLE, tab = null } = {}) {
+async function open(t, { on = '2026-09-09', data = SAMPLE, tab = null, sec = null } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 402, height: 874 } });
   await ctx.addInitScript(freeze(on));
   const page = await ctx.newPage();
@@ -64,6 +64,7 @@ async function open(t, { on = '2026-09-09', data = SAMPLE, tab = null } = {}) {
   await page.reload();
   await page.waitForSelector('#view .card, #view .banner', { timeout: 5000 });
   if (tab) { await page.click(`.tabs button[data-tab="${tab}"]`); await page.waitForTimeout(250); }
+  if (sec) { await page.click(`[data-act="moneyTab"][data-v="${sec}"]`); await page.waitForTimeout(250); }
   t.after(async () => { await ctx.close(); assert.deepEqual(errors, [], 'no console or page errors'); });
   return page;
 }
@@ -147,7 +148,7 @@ test('the day turning over redraws the figures', skip, async t => {
 
 test('changing a bill amount offers to keep the old price', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
-  const page = await open(t, { data, tab: 'money' });
+  const page = await open(t, { data, tab: 'money', sec: 'bills' });
   await page.click('[data-act="toggle"][data-key="editBills"]');
   await page.waitForTimeout(250);
   await page.fill('[data-set="money.bills.2.amount"]', '110');            // Energy 96 -> 110
@@ -168,7 +169,7 @@ test('changing a bill amount offers to keep the old price', skip, async t => {
 });
 
 test('declining the offer just changes the amount', skip, async t => {
-  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money', sec: 'bills' });
   await page.click('[data-act="toggle"][data-key="editBills"]');
   await page.waitForTimeout(250);
   await page.fill('[data-set="money.bills.2.amount"]', '99');
@@ -184,7 +185,7 @@ test('declining the offer just changes the amount', skip, async t => {
 test('a brand new bill does not trigger the history prompt', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
   data.money.bills.push({ id: 'n', name: 'New', category: 'Other', amount: 10, dueDay: 5, started: '2026-09' });
-  const page = await open(t, { data, tab: 'money' });
+  const page = await open(t, { data, tab: 'money', sec: 'bills' });
   await page.click('[data-act="toggle"][data-key="editBills"]');
   await page.waitForTimeout(250);
   await page.fill('[data-set="money.bills.3.amount"]', '12');
@@ -195,7 +196,7 @@ test('a brand new bill does not trigger the history prompt', skip, async t => {
 });
 
 test('a repeated change event cannot split the same bill twice', skip, async t => {
-  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money', sec: 'bills' });
   await page.click('[data-act="toggle"][data-key="editBills"]');
   await page.waitForTimeout(250);
   // fire change twice in a row, as a stray blur or a double-commit would
@@ -586,7 +587,7 @@ test('savings pots add, show progress and remove', skip, async t => {
     { id: '1', name: 'Emergency fund', balance: 1200, target: 3000, monthly: 150 },
     { id: '2', name: 'Holiday', balance: 800, target: 800, monthly: 0 }
   ];
-  const page = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
   const card = async () => (await page.$$eval('#view .card', cs =>
     cs.map(c => c.textContent.replace(/\s+/g, ' ')))).find(c => c.includes('Savings pots'));
 
@@ -645,7 +646,7 @@ test('the mortgage can be toggled in and out of the net figure', skip, async t =
     { id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08, repayment: 958.41, apr: 0.041 }
   ];
   data.money.netLongTerm = false;
-  const page = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
   const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
     .find(c => c.includes('Savings pots'));
 
@@ -667,8 +668,29 @@ test('with no long-term debt the toggle is not offered', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
   data.money.pots = [{ id: 'p1', name: 'Holiday', balance: 500, target: 1000, monthly: 50 }];
   data.money.debts = [{ id: 'd1', name: 'Card', type: 'Short-term', balance: 300, repayment: 50, apr: null }];
-  const page = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
   assert.equal(await page.$$eval('[data-set="money.netLongTerm"]', e => e.length), 0, 'nothing to toggle');
   assert.match((await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
     .find(c => c.includes('Savings pots')), /Pots less short-term debt.*£200\.00/);
+});
+
+test('Money is split into sections, each a screen or two', skip, async t => {
+  const page = await open(t, { tab: 'money' });
+  const heads = () => page.$$eval('#view .card h2', es => es.map(e => e.firstChild.textContent.trim()));
+  assert.deepEqual(await heads(), ['Left until pay day', 'Disposable by pay period'], 'Now is the default');
+  const tall = await page.evaluate(() => document.documentElement.scrollHeight);
+  assert.ok(tall < 874 * 4, `Now is ${(tall / 874).toFixed(1)} screens, was 7.7 with everything stacked`);
+
+  await page.click('[data-act="moneyTab"][data-v="bills"]'); await page.waitForTimeout(250);
+  assert.deepEqual(await heads(), ['Bills']);
+  await page.click('[data-act="moneyTab"][data-v="saving"]'); await page.waitForTimeout(250);
+  assert.deepEqual(await heads(), ['Savings pots', 'Debt']);
+  await page.click('[data-act="moneyTab"][data-v="history"]'); await page.waitForTimeout(250);
+  assert.deepEqual(await heads(), ['By year', 'Month by month']);
+  assert.ok(await page.$('#chart'), 'the chart lives in History');
+
+  // Home's shortcut lands on Now whatever section was last open
+  await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(250);
+  await page.click('[data-act="tab"][data-tab="money"][data-sec="now"]'); await page.waitForTimeout(250);
+  assert.equal((await heads())[0], 'Left until pay day');
 });

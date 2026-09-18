@@ -180,6 +180,7 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
   padding:9px 6px;border-radius:calc(var(--r-sm) - 2px);cursor:pointer;min-height:0;white-space:nowrap;
   transition:background .15s,color .15s}
 .seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:var(--sh-1)}
+.subnav{margin:12px 0 0}
 :root[data-theme="dark"] .seg button[aria-pressed="true"]{background:var(--brand);color:var(--on-brand)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .seg button[aria-pressed="true"]{background:var(--brand);color:var(--on-brand)}}
 
@@ -995,7 +996,7 @@ const $ = s => document.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 let S, storageOK = true, tab = 'home', theme = 'auto';
 const ui = { payday: null, openYears: {}, showAllMonths: false, editBills: false, editDebts: false, editFixed: false,
-  editJobs: false, editPots: false, showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
+  editJobs: false, editPots: false, moneyTab: 'now', showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
 
 const TABS = [
   { k: 'home', l: 'Home', d: 'M3 10.6 12 3.4l9 7.2M5.6 9.4V20a1 1 0 0 0 1 1h10.8a1 1 0 0 0 1-1V9.4' },
@@ -1353,6 +1354,13 @@ function flowOptions() {
     ${toggle('money.bankHols', m.bankHols, 'Count bank holidays too', 'England & Wales dates, worked out in the app — Easter included.')}`;
 }
 
+/* Money had grown to seven cards and nearly eight screens on a phone — every
+   feature landed there and each was right to, but together it was a wall.
+   Four sections, each a screen or two: what is happening now, the bills, what
+   is put away against what is owed, and the history you look at monthly. */
+const MONEY_SECTIONS = [{ v: 'now', l: 'Now' }, { v: 'bills', l: 'Bills' }, { v: 'saving', l: 'Saving' }, { v: 'history', l: 'History' }];
+const moneySwitcher = sec => `<div class="subnav">${segment('moneyTab', sec, MONEY_SECTIONS)}</div>`;
+
 /* ---------- views ---------- */
 const VIEWS = {
   home() {
@@ -1387,7 +1395,7 @@ const VIEWS = {
         ${nextFew.length ? `<div class="ledger">${nextFew.map(e => ledgerRow(e)).join('')}</div>` : '<div class="empty">Nothing left to leave before pay day.</div>'}
         ${(() => { const rest = fl.events.slice(3);
           return rest.length ? `<div class="note">+ ${rest.length} more before pay day — ${C.gbp(rest.reduce((a, e) => a + e.amount, 0))} of them, ${C.gbp(fl.outgoings)} altogether.</div>` : ''; })()}
-        <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money">Open cash flow</button></div></div>`;
+        <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money" data-sec="now">Open cash flow</button></div></div>`;
     }
 
     if (nx) h += `<div class="card"><div class="eyebrow">Next pay day · ${esc(C.fmtD(nx.payday))}</div>
@@ -1463,8 +1471,11 @@ const VIEWS = {
     const cur = m.thisMonthKey;
     const months = m.months.filter(x => ui.showAllMonths || x.month <= C.addMonths(cur + '-01', 1).slice(0, 7)).slice().reverse();
 
+    const sec = MONEY_SECTIONS.some(x => x.v === ui.moneyTab) ? ui.moneyTab : 'now';
+    let h = moneySwitcher(sec);
+    if (sec === 'now') {
     /* --- 1. cash flow to the next pay day --- */
-    let h = `<div class="card"><h2>Left until pay day<span class="hint">${fl.days} day${fl.days === 1 ? '' : 's'} · ${esc(C.fmtDM(fl.to))}</span></h2>`;
+    h += `<div class="card"><h2>Left until pay day<span class="hint">${fl.days} day${fl.days === 1 ? '' : 's'} · ${esc(C.fmtDM(fl.to))}</span></h2>`;
     if (fl.hasBal) {
       h += `<div class="flowhero"><div><div class="amt ${fl.safe < 0 ? 'neg' : ''}">${C.gbp(fl.safe)}</div>
           <div class="muted small">free to spend${fl.overdraft ? ', using your ' + C.gbp(fl.overdraft, 0) + ' overdraft' : ''}${fl.buffer ? ', keeping your ' + C.gbp(fl.buffer, 0) + ' buffer' : ''}</div></div>
@@ -1514,7 +1525,7 @@ const VIEWS = {
       Retype the balance whenever you check your bank — the running total restarts from whatever you enter, and bills come off again as the days pass. Overdrawn? Type the amount, then tap <b>+</b> beside it to flip it to <b>−</b>.</div>
       ${fl.paydayPassed ? `<div class="banner" style="margin-top:12px"><b>Pay day has been since you typed this.</b> The figures above are worked forward from ${esc(C.fmtD(fl.typedOn))} — check your bank and retype it.${fl.amex ? ` Paid the card? Press <b>Pay now</b> under American Express.` : ''}</div>`
         : fl.staleDays >= 14 ? `<div class="banner" style="margin-top:12px"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
-      ${m.undated ? `<div class="banner" style="margin-top:12px"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} under Bills below.</div>` : ''}
+      ${m.undated ? `<div class="banner" style="margin-top:12px"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} in <b>Bills</b>.</div>` : ''}
       ${fl.events.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
         (() => { let bal = fl.hasBal ? fl.start : null;
           return fl.events.map(e => { if (bal !== null) bal = C.r2(bal - e.amount); return ledgerRow(e, bal); }).join('')
@@ -1543,6 +1554,8 @@ const VIEWS = {
       ${flows.length ? `<div class="btnrow"><button class="btn ghost sm" data-act="morePeriods">${ui.flowPeriods >= 12 ? 'Show fewer' : 'Show more periods'}</button></div>` : ''}
       ${flows.length ? `<div class="note">Average disposable across these ${flows.length} periods: <b>${C.gbp(C.r2(flows.reduce((a, f) => a + f.disposable, 0) / flows.length))}</b>. Bills that stop or start are honoured, and linked debt repayments follow the debt list.</div>` : ''}</div>`;
 
+    }
+    if (sec === 'history') {
     /* --- 3. history --- */
     h += `<div class="card"><h2>By year</h2><div class="tscroll"><table class="table"><tr><th>Year</th><th>Earnings</th><th>Bills</th><th>Disposable</th><th>Saved</th><th>Rate</th></tr>
       ${m.byYear.filter(y => y.n || y.saved).map(y => `<tr><td>${y.year}</td><td>${C.gbp(y.earnings, 0)}</td><td>${C.gbp(y.outgoings, 0)}</td><td>${C.gbp(y.disposable, 0)}</td><td>${C.gbp(y.saved, 0)}</td><td>${C.pct(y.rate)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No months filled in yet.</td></tr>'}</table></div>
@@ -1553,6 +1566,8 @@ const VIEWS = {
         ${x.has ? `<div class="note">Bills ${C.gbp(x.outgoings)} · potential savings ${C.gbp(x.potential)} (disposable minus the ${C.gbp(S.money.buffer, 0)} buffer)</div>` : ''}</div>`; }).join('') || '<div class="empty">No months yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="showAllMonths">${ui.showAllMonths ? 'Show fewer months' : 'Show all months'}</button><button class="btn sm" data-act="addMonth">Add ${esc(C.fmtM(nextMonthKey()))}</button></div></div>`;
 
+    }
+    if (sec === 'bills') {
     /* --- 4. bills --- */
     h += `<div class="card"><h2>Bills</h2><div class="row"><div class="l"><b>Active bills total</b><small>${m.active.length} bills · ${m.dated.length} with a payment date</small></div><div class="strong num">${C.gbp(m.activeTotal)}</div></div>
       ${ui.editBills ? m.bills.map((b, i) => `<div class="erow">${field('Bill', inp(`money.bills.${i}.name`, b.name, 'text'))}${field('Category', sel(`money.bills.${i}.category`, b.category, CATS))}
@@ -1565,7 +1580,7 @@ const VIEWS = {
       ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
         return cats.length > 1 ? `<div class="sep"></div><div class="eyebrow">Where it goes each month</div>
           ${cats.map(([k, v]) => `<div class="prow"><span><b>${esc(k)}</b></span><span class="num muted small">${C.gbp(v, 0)} · ${C.pct(v / m.activeTotal)}</span>${bar(v / m.activeTotal, 'teal')}</div>`).join('')}` : ''; })()}
-      <div class="note">The day of the month is what makes the cash flow above work. Use 31 for "last day" — short months fall back to the 28th, 29th or 30th automatically. Change an amount and the app offers to keep the old price, which is what builds the Price changes card below.</div></div>`;
+      <div class="note">The day of the month is what makes the cash flow in <b>Now</b> work. Use 31 for "last day" — short months fall back to the 28th, 29th or 30th automatically. Change an amount and the app offers to keep the old price, which is what builds the Price changes card underneath.</div></div>`;
 
     /* --- 4b. what bills have done over time --- */
     const hist = C.priceHistory(S.money.bills);
@@ -1585,6 +1600,8 @@ const VIEWS = {
         <div class="note">Built from the history you keep when a price changes. Edit a bill's amount and the app offers to keep the old one — that is what fills this in.</div></div>`;
     }
 
+    }
+    if (sec === 'saving') {
     /* --- 4c. savings pots --- */
     const pots = C.potsCalc(S.money.pots, S.money.debts, null, S.money.netLongTerm);
     h += `<div class="card"><h2>Savings pots${pots.list.length ? `<span class="hint">${pots.done ? pots.done + ' hit' : pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</span>` : ''}</h2>
@@ -1608,7 +1625,7 @@ const VIEWS = {
           <div class="num" style="text-align:right"><b>${C.gbp(p.balance)}</b>${p.target ? `<div class="muted small">${C.pct(p.pct)}</div>` : ''}</div>
           ${p.target ? `<div class="pb">${bar(p.pct, p.done ? '' : 'teal')}</div>` : ''}</div>`).join('') || '<div class="empty">No pots yet. Add one to track what you are putting aside.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editPots">${ui.editPots ? 'Done' : 'Edit pots'}</button>${ui.editPots ? '<button class="btn sm" data-act="addPot">Add pot</button>' : ''}</div>
-      <div class="note">Pots sit outside the cash flow above — money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account. Put what goes in each month against a pot and it works out when you will get there.</div></div>`;
+      <div class="note">Pots sit outside the cash flow in <b>Now</b> — money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account. Put what goes in each month against a pot and it works out when you will get there.</div></div>`;
 
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>
@@ -1618,7 +1635,8 @@ const VIEWS = {
         : m.debts.map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b><small>${esc(d.type)} · ${C.gbp(d.repayment)}/month${d.payoff ? d.payoff.never ? ' · repayment below interest' : ' · clear by ' + esc(C.fmtM(d.payoff.date)) + (d.payoff.naive ? ' (no interest)' : '') : ''}</small></div><div class="num">${C.gbp(d.balance)}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editDebts">${ui.editDebts ? 'Done' : 'Edit debts'}</button>${ui.editDebts ? '<button class="btn sm" data-act="addDebt">Add debt</button>' : ''}</div>
       <div class="note">Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
-    return { title: 'Money', sub: fl.hasBal ? C.gbp(fl.safe, 0) + ' free · ' + fl.days + ' days to pay day' : (m.latest ? 'latest: ' + C.fmtM(m.latest.month) : ''), html: h };
+    }
+    return { title: 'Money', chart: sec === 'history' ? m.last12 : null, sub: fl.hasBal ? C.gbp(fl.safe, 0) + ' free · ' + fl.days + ' days to pay day' : (m.latest ? 'latest: ' + C.fmtM(m.latest.month) : ''), html: h };
   },
 
   lists() {
@@ -1832,7 +1850,8 @@ document.addEventListener('click', async e => {
   const t = e.target.closest('[data-act]'); if (!t) return;
   const a = t.dataset.act, d = t.dataset;
   if (!S && a !== 'forgotPin') return;                 // still locked; nothing to act on
-  if (a === 'tab') { tab = d.tab; render(false); return; }
+  if (a === 'tab') { tab = d.tab; if (d.sec) ui.moneyTab = d.sec; render(false); return; }
+  if (a === 'moneyTab') { ui.moneyTab = d.v; render(false); return; }
   if (a === 'theme') { cycleTheme(); return; }
   if (a === 'pick') { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; render(false); return; }
   if (a === 'yeartoggle') { ui.openYears[d.y] = !ui.openYears[d.y]; render(); return; }
