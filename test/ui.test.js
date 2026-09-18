@@ -593,7 +593,7 @@ test('savings pots add, show progress and remove', skip, async t => {
   let c = await card();
   assert.match(c, /Put away.*£2,000\.00/, 'totals the pots');
   assert.match(c, /£150\.00 a month going in/, 'only the emergency fund has a monthly going in');
-  assert.match(c, /Pots less debt.*£150\.00/, "£2,000 of pots against the sample's £1,850 card");
+  assert.match(c, /Pots less short-term debt.*£150\.00/, "£2,000 of pots against the sample's £1,850 card");
   assert.match(c, /Emergency fund.*£1,800\.00 to go of £3,000.*there by Sep 2027/);
   assert.match(c, /Holiday.*target of £800 reached/);
 
@@ -634,4 +634,41 @@ test('pots stay out of the cash flow', skip, async t => {
   const withPots = await open(t, { on: '2026-09-18', data, tab: 'money' });
   assert.equal(await withPots.$eval('.flowhero .amt', e => e.textContent), freeWithout,
     'money already set aside is not money to spend before pay day');
+});
+
+test('the mortgage can be toggled in and out of the net figure', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.pots = [{ id: 'p1', name: 'Omega Seamaster Watch', balance: 0, target: 5600, monthly: 100 }];
+  data.money.debts = [
+    { id: 'd1', name: 'Lloyds Credit', type: 'Short-term', balance: 1850, repayment: 120, apr: 0.219 },
+    { id: 'd2', name: 'Sofa', type: 'Short-term', balance: 640, repayment: 55, apr: null },
+    { id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08, repayment: 958.41, apr: 0.041 }
+  ];
+  data.money.netLongTerm = false;
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('Savings pots'));
+
+  let c = await card();
+  assert.match(c, /Pots less short-term debt/, 'labelled for what it actually counts');
+  assert.match(c, /£197,572 of long-term debt left out of this/, 'and says what it is leaving out');
+  assert.match(c, /-£2,490\.00/, 'a figure that means something');
+  assert.ok(!/-£200,062/.test(c), 'the mortgage no longer swamps it');
+
+  await page.click('.switch:has(input[data-set="money.netLongTerm"])');
+  await page.waitForTimeout(400);
+  c = await card();
+  assert.match(c, /Pots less all debt/);
+  assert.match(c, /-£200,062\.08/, 'and back again when you ask for it');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.netLongTerm), true);
+});
+
+test('with no long-term debt the toggle is not offered', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.pots = [{ id: 'p1', name: 'Holiday', balance: 500, target: 1000, monthly: 50 }];
+  data.money.debts = [{ id: 'd1', name: 'Card', type: 'Short-term', balance: 300, repayment: 50, apr: null }];
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  assert.equal(await page.$$eval('[data-set="money.netLongTerm"]', e => e.length), 0, 'nothing to toggle');
+  assert.match((await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('Savings pots')), /Pots less short-term debt.*£200\.00/);
 });

@@ -411,7 +411,7 @@ body.locked header,body.locked main,body.locked .tabs{display:none}
     <button type="button" class="locklink" data-act="forgotPin">Forgotten your PIN?</button>
   </form>
 </div>
-<script id="seed" type="application/json">{"version":2,"generic":true,"name":"Dec","money":{"buffer":1000,"overdraft":0,"amex":null,"amexBefore":false,"amexUndo":null,"balance":null,"balanceOn":null,"dueShift":"next","bankHols":true,"bills":[],"months":[],"debts":[],"pots":[]},"house":[],"classic":[],"mega":[],"psm":[],"games":[],"goals":"","pay":{"salary":null,"hoursWeek":35,"weeksYear":52.1667,"sundayRate":3.7,"nextPayDay":"2026-08-28","periodEndDays":6,"personalAllowance":12570,"taxCode":"1257L","fixed":[],"hours":{},"hpaHistory":{},"tax":{"basicRate":0.2,"basicBand":37700,"higherRate":0.4,"higherBand":125140,"addRate":0.45,"niPT":12570,"niUEL":50270,"niMain":0.08,"niUpper":0.02,"taxYearStart":"2026-04-06"}}}</script>
+<script id="seed" type="application/json">{"version":2,"generic":true,"name":"Dec","money":{"buffer":1000,"overdraft":0,"amex":null,"amexBefore":false,"amexUndo":null,"netLongTerm":false,"balance":null,"balanceOn":null,"dueShift":"next","bankHols":true,"bills":[],"months":[],"debts":[],"pots":[]},"house":[],"classic":[],"mega":[],"psm":[],"games":[],"goals":"","pay":{"salary":null,"hoursWeek":35,"weeksYear":52.1667,"sundayRate":3.7,"nextPayDay":"2026-08-28","periodEndDays":6,"personalAllowance":12570,"taxCode":"1257L","fixed":[],"hours":{},"hpaHistory":{},"tax":{"basicRate":0.2,"basicBand":37700,"higherRate":0.4,"higherBand":125140,"addRate":0.45,"niPT":12570,"niUEL":50270,"niMain":0.08,"niUpper":0.02,"taxYearStart":"2026-04-06"}}}</script>
 <script>
 /* ===== calc: pure functions, no DOM ===== */
 const C = (() => {
@@ -846,7 +846,7 @@ const C = (() => {
      A pot is a balance you have put aside, optionally with something you are
      saving towards and what you put in each month. Everything else follows from
      those three numbers, so nothing needs keeping in step by hand. */
-  function potsCalc(pots, debts, tod) {
+  function potsCalc(pots, debts, tod, withLong) {
     tod = tod || today();
     const list = (pots || []).map(p => {
       const balance = num(p.balance), target = num(p.target), monthly = num(p.monthly);
@@ -860,8 +860,15 @@ const C = (() => {
         stalled: !!target && balance < target && !monthly };
     });
     const total = r2(list.reduce((a, p) => a + p.balance, 0));
-    const debtTotal = r2((debts || []).reduce((a, d) => a + num(d.balance), 0));
-    return { list, total, debtTotal, net: r2(total - debtTotal),
+    /* A mortgage dwarfs everything else and is not getting cleared this decade,
+       so counting it turns the net figure into one big number that never moves.
+       Long-term debt is opt-in; anything without a type counts, since only an
+       explicit "Long-term" is being set aside. */
+    const all = debts || [];
+    const longTotal = r2(all.filter(d => d.type === 'Long-term').reduce((a, d) => a + num(d.balance), 0));
+    const allTotal = r2(all.reduce((a, d) => a + num(d.balance), 0));
+    const debtTotal = withLong ? allTotal : r2(allTotal - longTotal);
+    return { list, total, debtTotal, longTotal, allTotal, withLong: !!withLong, net: r2(total - debtTotal),
       totalMonthly: r2(list.reduce((a, p) => a + p.monthly, 0)),
       targeted: list.filter(p => p.target).length,
       done: list.filter(p => p.done).length };
@@ -1030,6 +1037,7 @@ function normalize() {
   if (m.overdraft === undefined) m.overdraft = 0;
   if (m.amex === undefined) m.amex = null;
   if (typeof m.amexBefore !== 'boolean') m.amexBefore = false;
+  if (typeof m.netLongTerm !== 'boolean') m.netLongTerm = false;
   if (m.amexUndo === undefined) m.amexUndo = null;
   if (m.balance === undefined) m.balance = null;
   if (m.balanceOn === undefined) m.balanceOn = null;
@@ -1526,11 +1534,15 @@ const VIEWS = {
     }
 
     /* --- 4c. savings pots --- */
-    const pots = C.potsCalc(S.money.pots, S.money.debts);
+    const pots = C.potsCalc(S.money.pots, S.money.debts, null, S.money.netLongTerm);
     h += `<div class="card"><h2>Savings pots${pots.list.length ? `<span class="hint">${pots.done ? pots.done + ' hit' : pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</span>` : ''}</h2>
       <div class="row"><div class="l"><b>Put away</b><small>${pots.totalMonthly ? C.gbp(pots.totalMonthly) + ' a month going in' : 'across ' + pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</small></div><div class="strong num">${C.gbp(pots.total)}</div></div>
-      ${pots.debtTotal ? `<div class="row"><div class="l"><b>Pots less debt</b><small>what you would have if you cleared everything today</small></div>
-        <div class="strong num ${pots.net < 0 ? 'neg' : 'pos'}">${C.gbp(pots.net)}</div></div>` : ''}
+      ${pots.allTotal ? `<div class="row"><div class="l"><b>Pots less ${pots.withLong ? 'all' : 'short-term'} debt</b>
+          <small>${pots.withLong ? 'what you would have if you cleared everything today'
+            : pots.longTotal ? C.gbp(pots.longTotal, 0) + ' of long-term debt left out of this' : 'what you would have if you cleared everything today'}</small></div>
+        <div class="strong num ${pots.net < 0 ? 'neg' : 'pos'}">${C.gbp(pots.net)}</div></div>
+      ${pots.longTotal ? toggle('money.netLongTerm', S.money.netLongTerm, 'Count long-term debt too',
+        'A mortgage is not getting cleared this year, so leaving it out keeps this figure about the debt you are actually chipping away at.') : ''}` : ''}
       ${ui.editPots ? S.money.pots.map((p, i) => `<div class="erow"><div class="full">${field('Pot', inp(`money.pots.${i}.name`, p.name, 'text'))}</div>
           ${field('Balance', inp(`money.pots.${i}.balance`, p.balance))}${field('Saving towards (optional)', inp(`money.pots.${i}.target`, p.target, 'number', 'placeholder="none"'))}
           ${field('Going in each month', inp(`money.pots.${i}.monthly`, p.monthly, 'number', 'placeholder="0"'))}

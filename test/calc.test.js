@@ -521,3 +521,35 @@ test('pots cope with nothing in them', () => {
   assert.equal(blank.total, 0);
   assert.equal(blank.list[0].balance, 0, 'a half-filled pot reads as zero rather than breaking');
 });
+
+test('long-term debt is left out of the net unless asked for', () => {
+  const pots = [{ name: 'Watch', balance: 400, target: 5600, monthly: 100 }];
+  const debts = [
+    { name: 'Lloyds Credit', type: 'Short-term', balance: 1850 },
+    { name: 'Sofa', type: 'Short-term', balance: 640 },
+    { name: 'Mortgage', type: 'Long-term', balance: 197572.08 }
+  ];
+  const without = C.potsCalc(pots, debts, '2026-09-18', false);
+  assert.equal(without.debtTotal, 2490, 'only what is actually being chipped away at');
+  assert.equal(without.longTotal, 197572.08, 'but the mortgage is still reported');
+  assert.equal(without.allTotal, 200062.08);
+  assert.equal(without.net, -2090);
+  assert.equal(without.withLong, false);
+
+  const withIt = C.potsCalc(pots, debts, '2026-09-18', true);
+  assert.equal(withIt.debtTotal, 200062.08);
+  assert.equal(withIt.net, -199662.08);
+  assert.equal(withIt.withLong, true);
+});
+
+test('a debt with no type counts — only an explicit Long-term is set aside', () => {
+  assert.equal(C.potsCalc([], [{ balance: 500 }], '2026-09-18', false).debtTotal, 500);
+  assert.equal(C.potsCalc([], [{ balance: 500, type: 'Short-term' }], '2026-09-18', false).debtTotal, 500);
+  assert.equal(C.potsCalc([], [{ balance: 500, type: 'Long-term' }], '2026-09-18', false).debtTotal, 0);
+});
+
+test('with no long-term debt the two settings agree', () => {
+  const debts = [{ type: 'Short-term', balance: 1850 }];
+  assert.equal(C.potsCalc([], debts, '2026-09-18', false).net, C.potsCalc([], debts, '2026-09-18', true).net);
+  assert.equal(C.potsCalc([], debts, '2026-09-18', false).longTotal, 0);
+});
