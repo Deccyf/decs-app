@@ -553,3 +553,112 @@ test('with no long-term debt the two settings agree', () => {
   assert.equal(C.potsCalc([], debts, '2026-09-18', false).net, C.potsCalc([], debts, '2026-09-18', true).net);
   assert.equal(C.potsCalc([], debts, '2026-09-18', false).longTotal, 0);
 });
+
+/* ------------------------------------------------- NI thresholds & taper -- */
+test('NI uses the published 4-weekly thresholds, not the annual figure over 13', () => {
+  // HMRC works the weekly threshold out first (£12,570/52 rounded up = £242)
+  // and multiplies up, so 4-weekly is £968. 12,570/13 would give £967.
+  const at = basic => C.payCalc(pay({ salary: basic * 13, weeksYear: 52, personalAllowance: 0 }), '2026-09-18')
+    .rows.find(r => r.payday === '2026-08-28');
+  assert.equal(C.r2(at(968).basic), 968, 'a period of exactly the threshold');
+  assert.equal(C.r2(at(968).ni), 0, 'nothing is due at the threshold itself');
+  assert.equal(C.r2(at(969).ni), 0.08, 'a pound over costs 8p');
+  // and the upper limit: £50,270/52 rounded up = £967 a week, £3,868 over four
+  assert.equal(C.r2(at(3868).ni), C.r2(0.08 * (3868 - 968)), 'all main rate up to the upper limit');
+  assert.equal(C.r2(at(3869).ni), C.r2(0.08 * 2900 + 0.02), 'the pound above it drops to 2%');
+});
+
+test('it says when the personal allowance should have been cut back', () => {
+  const low = C.payCalc(pay({ salary: 51400 }), '2026-09-18');
+  assert.equal(low.paCheck.stale, false, 'nothing to say below £100,000');
+
+  const high = C.payCalc(pay({ salary: 130000 }), '2026-09-18');
+  assert.ok(high.totals.taxable > 100000);
+  assert.equal(high.paCheck.stale, true, 'flagged, because the code on file is still the full allowance');
+  assert.equal(high.paCheck.should, 0, 'gone entirely by £125,140');
+  assert.equal(high.paCheck.allowance, 12570);
+
+  // a code that has already been cut back is not nagged about
+  const fixed = C.payCalc(pay({ salary: 110000, personalAllowance: 7570 }), '2026-09-18');
+  assert.ok(fixed.totals.taxable > 100000);
+  assert.equal(fixed.paCheck.stale, false);
+});
+
+/* --------------------------------------------------------- spending log -- */
+const spendMoney = (log, extra) => Object.assign({
+  buffer: 0, dueShift: 'next', bankHols: true, months: [], debts: [], pots: [], balanceLog: log,
+  bills: [{ id: '1', name: 'Rent', category: 'Housing', amount: 700, dueDay: 8, started: '2024-01' }]
+}, extra);
+
+test('spending is whatever the bills and pay cannot account for', () => {
+  const p = { rows: [{ payday: '2026-09-11', net: 2000 }] };
+  const sp = C.spendLog(spendMoney([
+    { on: '2026-09-01', balance: 1500, adj: 0 },
+    { on: '2026-09-05', balance: 1300, adj: 0 },   // no bills, no pay: £200 spent
+    { on: '2026-09-15', balance: 2200, adj: 0 }    // £700 rent out, £2,000 pay in
+  ]), p, OPT, '2026-09-15');
+
+  assert.equal(sp.readings, 3);
+  assert.equal(sp.windows.length, 2);
+  const [a, b] = sp.windows;
+  assert.deepEqual([a.days, a.bills, a.pay, a.spent, a.perDay], [4, 0, 0, 200, 50]);
+  assert.equal(b.bills, 700, 'the rent on the 8th falls in the second window');
+  assert.equal(b.pay, 2000, 'so does the pay day');
+  assert.equal(b.expected, 1300 - 700 + 2000);
+  assert.equal(b.spent, 400, '£2,600 expected against £2,200 read');
+  assert.equal(b.perDay, 40);
+  assert.equal(b.hasPay, true);
+  assert.equal(sp.last, a, 'the headline skips back past the pay day window');
+  assert.equal(sp.perDay, 50, 'and so does the average: only the clean window counts');
+  assert.equal(sp.list.length, 2, 'both are still listed');
+  assert.equal(sp.since, 0, 'read today');
+});
+
+test('the average is over the days, not the mean of the windows', () => {
+  const sp = C.spendLog(spendMoney([
+    { on: '2026-09-01', balance: 1000, adj: 0 },
+    { on: '2026-09-03', balance: 900, adj: 0 },     // 2 days, £50 a day
+    { on: '2026-09-07', balance: 500, adj: 0 }      // 4 days, £100 a day
+  ], { bills: [] }), { rows: [] }, OPT, '2026-09-07');
+  assert.equal(sp.perDay, C.r2(500 / 6), 'weighted by length, so the long stretch counts for more');
+  assert.notEqual(sp.perDay, 75, 'not the mean of 50 and 100');
+});
+
+test('an amount the app took off itself is not counted as spending', () => {
+  const p = { rows: [] };
+  const log = [
+    { on: '2026-09-01', balance: 1500, adj: 0 },
+    { on: '2026-09-02', balance: 600, adj: -900 }   // the card cleared, not a day out
+  ];
+  const sp = C.spendLog(spendMoney(log), p, OPT, '2026-09-02');
+  assert.equal(sp.last.spent, 0, 'the £900 is explained');
+  assert.equal(sp.last.adj, -900);
+
+  // without the adjustment the same drop would read as a spree
+  const naive = C.spendLog(spendMoney([log[0], { on: '2026-09-02', balance: 600, adj: 0 }]), p, OPT, '2026-09-02');
+  assert.equal(naive.last.spent, 900);
+});
+
+test('a half-built log cannot break the spending figures', () => {
+  const p = { rows: [] };
+  assert.equal(C.spendLog(spendMoney([]), p, OPT, '2026-09-15').last, null);
+  assert.equal(C.spendLog(spendMoney(null), p, OPT, '2026-09-15').readings, 0);
+  const messy = C.spendLog(spendMoney([
+    { on: '2026-09-05', balance: 1000 },            // no adj recorded
+    { on: 'nonsense', balance: 900 },
+    { on: '2026-09-05', balance: 950 },             // same day: no window from it
+    { on: '2026-09-07', balance: 800, adj: null }
+  ]), p, OPT, '2026-09-09');
+  assert.equal(messy.readings, 3, 'the unparseable date is dropped');
+  assert.ok(messy.windows.every(w => w.days > 0), 'no zero-length windows');
+  assert.equal(messy.since, 2);
+});
+
+test('more money than expected reads as money in, not negative spending', () => {
+  const sp = C.spendLog(spendMoney([
+    { on: '2026-09-01', balance: 500, adj: 0 },
+    { on: '2026-09-03', balance: 700, adj: 0 }
+  ]), { rows: [] }, OPT, '2026-09-03');
+  assert.equal(sp.last.spent, -200);
+  assert.equal(sp.perDay, -100);
+});

@@ -30,3 +30,13 @@ Undo is general: `commit()` snapshots the state before each change, and the
 arrow in the header (or Ctrl+Z; Ctrl+Shift+Z to redo) puts the previous
 snapshot back whole. The history is in memory only and is never written to the
 device, so a PIN-locked app leaves no unencrypted trail.
+
+Day-to-day spending is inferred, not typed. Every balance read off the bank is
+appended to `money.balanceLog`; `C.spendLog` takes each pair of readings, works
+out what the bills and pay should have done in between, and calls the remainder
+spending. Stretches touching a pay day are shown but kept out of the average,
+because the pay in them is this app's estimate rather than a payslip.
+
+The data lives only on the phone, so two things guard it: `askPersist()` asks
+the browser for persistent storage on boot, and `S.backupOn` records the last
+download so Home can nudge when it goes stale.

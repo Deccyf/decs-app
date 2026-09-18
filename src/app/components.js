@@ -79,6 +79,28 @@ function pinCard() {
       ? 'A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.'
       : 'Encrypts everything stored on this device with a PIN only you know. If you forget it the data cannot be recovered, so a backup is downloaded first.'}</div></div>`;
 }
+/* Spending the app worked out for itself. Two balance readings and the bills
+   between them are enough — nothing extra is typed for this. */
+function spendCard(sp, fl) {
+  if (!sp.readings) return '';
+  if (!sp.last) return `<div class="card"><h2>Day-to-day spending</h2>
+    <div class="muted">Next time you check your bank, retype the balance. Whatever the bills and pay can't account for is what you actually spent, and it turns up here.</div></div>`;
+  const w = sp.last, avg = sp.perDay;
+  const likely = avg != null && avg > 0 && fl.hasBal && fl.days > 0 ? C.r2(avg * fl.days) : null;
+  const gap = likely === null ? null : C.r2(fl.safe - likely);
+  return `<div class="card"><h2>Day-to-day spending${avg != null && avg > 0 ? `<span class="hint">${C.gbp(avg)} a day</span>` : ''}</h2>
+    <div class="muted small mb4">Worked out from your balance readings — what the bills and pay can't account for is what you spent.</div>
+    <div class="flowhero"><div><div class="amt${w.spent < 0 ? ' pos' : ''}">${C.gbp(Math.abs(w.spent))}</div>
+      <div class="muted small">${w.spent < 0 ? 'more came in than expected' : 'spent'} between ${esc(C.fmtDM(w.from))} and ${esc(C.fmtDM(w.to))}</div></div>
+      <div class="per"><b>${C.gbp(Math.abs(w.perDay))}</b>a day</div></div>
+    ${likely !== null ? `<div class="results">
+      <div class="r"><span>Free to spend now</span><span class="num">${C.gbp(fl.safe)}</span></div>
+      <div class="r"><span>${fl.days} more day${fl.days === 1 ? '' : 's'} at ${C.gbp(avg)} a day</span><span class="num neg">-${C.gbp(likely)}</span></div>
+      <div class="r total"><span>${gap < 0 ? 'Short before pay day' : 'Spare at that rate'}</span><span class="num ${gap < 0 ? 'neg' : 'pos'}">${C.gbp(Math.abs(gap))}</span></div></div>` : ''}
+    ${sp.list.length > 1 ? `<div class="sep"></div><div class="eyebrow">Between your last checks</div>
+      <div>${sp.list.slice().reverse().map(x => `<div class="row${x.hasPay ? ' aside' : ''}"><div class="l"><b>${C.gbp(x.spent)}</b><small>${esc(C.fmtDM(x.from))} – ${esc(C.fmtDM(x.to))} · ${x.days} day${x.days === 1 ? '' : 's'}${x.hasPay ? ' · pay day' : ''}</small></div><div class="num tr">${C.gbp(x.perDay)}<div class="muted small">a day</div></div></div>`).join('')}</div>` : ''}
+    <div class="note">Only money leaving your current account counts here.${sp.list.some(x => x.hasPay) ? ' A stretch with pay day in it is left out of the average, because the pay in it is this app\'s estimate rather than your payslip.' : ''} ${sp.since ? `Your last reading was ${sp.since} day${sp.since === 1 ? '' : 's'} ago — retype the balance to bring it up to date.` : 'Read today.'}</div></div>`;
+}
 function aboutCard() {
   const m = S.money;
   const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [m.pots.length, 'pot'], [m.debts.length, 'debt'],
@@ -87,12 +109,20 @@ function aboutCard() {
   return `<div class="card"><h2>About</h2>
     <div class="row"><div class="l"><b>${esc(document.title)}</b><small>${storageOK ? 'Saving on this device.' : 'Not saving on this device.'}${pinIsSet() ? ' Encrypted.' : ''}</small></div></div>
     <div class="row"><div class="l"><b>On this device</b><small>${counts || 'Nothing yet — restore a backup or start typing.'}</small></div></div>
+    <div class="row"><div class="l"><b>Storage</b><small>${storagePersisted === true
+      ? 'Marked as permanent, so the browser will not clear it to free up space.'
+      : storagePersisted === false
+        ? 'The browser may clear this if the phone runs short of space. Keep a backup.'
+        : 'Saved on this device.'}</small></div></div>
     <div class="row"><div class="l"><b>Undo</b><small>The arrow in the header takes back the last change — a removed bill, a mistyped figure, even a reset — up to ${UNDO_MAX} steps, until the app is closed. Ctrl+Z on a keyboard.</small></div></div>
     <div class="note">Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Payslip settings each April.</div></div>`;
 }
 function backupCard(heading, note) {
+  const age = S.backupOn ? C.daysBetween(S.backupOn, C.today()) : null;
   return `<div class="card"><h2>${esc(heading)}</h2>
     <div class="muted">${storageOK ? 'Changes save automatically on this device.' : 'Not saving on this device.'} A backup is a small file you can restore on any phone or after a reset.</div>
+    <div class="row"><div class="l"><b>Last backup</b><small>${age === null ? "You haven't downloaded one yet." :
+      esc(C.fmtD(S.backupOn)) + (age === 0 ? ' — today' : age === 1 ? ' — yesterday' : ` — ${age} days ago`)}</small></div></div>
     <div class="btnrow"><button class="btn" data-act="export">Download backup</button><button class="btn ghost" data-act="copy">Copy backup</button>
       <button class="btn ghost" data-act="import">Restore backup</button>
       <button class="btn danger" data-act="reset">${SEED.generic ? 'Clear all data' : 'Reset to spreadsheet data'}</button></div>
@@ -100,8 +130,12 @@ function backupCard(heading, note) {
     <div class="note">${note}</div></div>`;
 }
 function paySettings(p) {
-  const P = S.pay;
-  return `<div class="card"><h2>Payslip settings</h2><div class="muted small">From your payslip. Hourly rate = salary ÷ weeks ÷ hours (${C.gbp(p.hourly)}/hr, basic ${C.gbp(p.basic)} a period). When your pay changes, add a line under Pay rises rather than editing the salary — that keeps past pay days as they were.</div>
+  const P = S.pay, pa = p.paCheck;
+  return `<div class="card"><h2>Payslip settings</h2>
+    ${pa && pa.stale ? `<div class="banner bad mb4"><b>Your personal allowance is too high for this year's pay.</b>
+      Over ${C.gbp(100000, 0)} HMRC takes away £1 of allowance for every £2 above it and sends a smaller tax code.
+      On ${C.gbp(pa.taxable, 0)} taxable it should be about ${C.gbp(pa.should, 0)}, not ${C.gbp(pa.allowance, 0)} —
+      change it under <b>Tax years</b> to match your code, or the tax here comes out too low.</div>` : ''}<div class="muted small">From your payslip. Hourly rate = salary ÷ weeks ÷ hours (${C.gbp(p.hourly)}/hr, basic ${C.gbp(p.basic)} a period). When your pay changes, add a line under Pay rises rather than editing the salary — that keeps past pay days as they were.</div>
     ${detailsBlock('yourpay', 'Your pay', `<div class="grid2">
       ${field('Annual basic salary', inp('pay.salary', P.salary))}${field('Contracted hours / week', inp('pay.hoursWeek', P.hoursWeek))}
       ${field('Weeks per year (payroll)', inp('pay.weeksYear', P.weeksYear))}${P.sundayAtT ? field('Sunday hours', '<input type="text" value="paid at plain time" disabled>') : field('Sunday premium £/hr', inp('pay.sundayRate', P.sundayRate))}

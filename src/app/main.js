@@ -77,7 +77,7 @@ document.addEventListener('click', async e => {
     const raw = el.value.trim();
     if (raw === '' || isNaN(parseFloat(raw))) { el.focus(); toast('Type the amount first, then tap ±'); return; }
     setPath(S, el.dataset.set, -parseFloat(raw));
-    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); S.money.amexUndo = null; }
+    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); S.money.amexUndo = null; logBalance(0); }
     commit('flipping the sign'); return;
   }
   if (a === 'morePeriods') { ui.flowPeriods = ui.flowPeriods >= 12 ? 4 : ui.flowPeriods + 4; render(); return; }
@@ -112,10 +112,12 @@ document.addEventListener('click', async e => {
     const amt = Math.abs(C.num(S.money.amex));
     if (!amt) { toast('No card balance to clear'); return; }
     // snapshot first so this is exactly reversible
-    S.money.amexUndo = { balance: S.money.balance, balanceOn: S.money.balanceOn, amex: S.money.amex, at: C.today() };
+    S.money.amexUndo = { balance: S.money.balance, balanceOn: S.money.balanceOn, amex: S.money.amex,
+      at: C.today(), logLen: S.money.balanceLog.length };
     S.money.balance = C.r2(C.num(S.money.balance) - amt);
     S.money.balanceOn = C.today();
     S.money.amex = 0;
+    logBalance(-amt);                                  // the drop is the card, not a day out
     commit('paying the card');
     toast(`${C.gbp(amt)} off your balance — undo is right there`);
     return;
@@ -124,6 +126,7 @@ document.addEventListener('click', async e => {
     const u = S.money.amexUndo;
     if (!u) return;
     S.money.balance = u.balance; S.money.balanceOn = u.balanceOn; S.money.amex = u.amex;
+    if (u.logLen != null) S.money.balanceLog.length = Math.min(u.logLen, S.money.balanceLog.length);
     S.money.amexUndo = null;
     commit('putting the card back');
     toast('Put back');
@@ -166,7 +169,7 @@ document.addEventListener('change', e => {
   if (amt) { billAmountChanged(+amt[1], parseInput(el)); return; }
   if (el.dataset.set) {
     setPath(S, el.dataset.set, parseInput(el));
-    if (el.dataset.set === 'money.balance') S.money.balanceOn = C.today();   // stamp it so a stale figure is obvious
+    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); logBalance(0); }   // stamp it so a stale figure is obvious
     if (el.dataset.set === 'money.balance' || el.dataset.set === 'money.amex') S.money.amexUndo = null;
     commit(fieldLabel(el));
   }
@@ -232,9 +235,12 @@ async function billAmountChanged(i, next) {
 
 /* ---------- backup ---------- */
 function exportBackup() {
+  S.backupOn = C.today();                              // stamped before it is written, so the file records its own date
   const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }); const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = `decs-tracker-${C.today()}.json`; document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800); toast('Backup downloaded');
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+  save(); historyMark(); render();                     // downloading is not an edit, so keep it out of undo
+  toast('Backup downloaded');
 }
 function importBackup(file) {
   const rd = new FileReader();
@@ -276,5 +282,6 @@ function importBackup(file) {
   if (PAY_ONLY) { tab = 'pay'; $('#tabs').style.display = 'none'; document.body.classList.add('notabs'); }
   lastDay = C.today();
   render(false);
+  askPersist().then(v => { if (v !== null && tab === 'settings') render(); });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => { });
 })();

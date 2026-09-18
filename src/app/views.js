@@ -88,8 +88,16 @@ const VIEWS = {
     if (m.undated) attn.push(['', `<b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date</b>, so ${m.undated === 1 ? "it's" : "they're"} missing from the cash flow.`, 'bills']);
     C.priceHistory(S.money.bills).filter(x => x.last.month >= C.mkey(C.addMonths(tod, -1)))
       .forEach(x => attn.push(['', `<b>${esc(x.name)}</b> ${x.last.diff > 0 ? 'went up' : 'came down'} ${C.gbp(Math.abs(x.last.diff))} a month in ${esc(C.fmtMs(x.last.month))}.`, 'bills']));
-    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, sec]) =>
-      `<button class="attnrow ${lvl}" data-act="tab" data-tab="money" data-sec="${sec}"><span>${text}</span><i aria-hidden="true">›</i></button>`).join('')}</div>`;
+    /* The figures live on this phone and nowhere else. Say so before it matters,
+       not after — and only once there is something worth losing. */
+    const anyData = S.money.bills.length || S.money.months.length || S.money.pots.length || S.games.length || S.classic.length;
+    const backupAge = S.backupOn ? C.daysBetween(S.backupOn, tod) : null;
+    if (anyData && backupAge === null) attn.push(['', `<b>No backup yet.</b> Lose this phone and these figures go with it.`, 'settings']);
+    else if (backupAge !== null && backupAge >= 30) attn.push(['', `<b>Last backup was ${backupAge} days ago.</b> Worth downloading a fresh one.`, 'settings']);
+    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest]) => {
+      const gear = dest === 'settings';
+      return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${gear ? 'settings' : 'money'}"${gear ? '' : ` data-sec="${esc(dest)}"`}><span>${text}</span><i aria-hidden="true">›</i></button>`;
+    }).join('')}</div>`;
 
     h += `<div class="tiles">
       ${fl.hasBal
@@ -228,6 +236,9 @@ const VIEWS = {
                 <div class="lv">-${C.gbp(fl.amexOnPay)}${fl.hasBal ? `<small>${C.gbp(fl.afterPay)}</small>` : ''}</div></div>` : ''}` : ''); })()
       }</div>` : ''}
       <div class="sep"></div>${flowOptions()}</div>`;
+
+    /* --- 1b. what the balance readings say has actually been spent --- */
+    h += spendCard(C.spendLog(S.money, p, opt), fl);
 
     /* --- 2. disposable income per pay period --- */
     h += `<div class="card"><h2>Disposable by pay period<span class="hint">from bill dates</span></h2>

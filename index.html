@@ -367,6 +367,7 @@ canvas{display:block}
 .searchbox{margin:12px 0 4px}
 .btnrow.end{margin:0;justify-content:flex-end}
 .semi{font-weight:600}
+.row.aside{opacity:.55}   /* shown, but not part of the figure above it */
 .warn{color:var(--warn)}
 .done{color:var(--muted);text-decoration:line-through}
 .errpre{white-space:pre-wrap;color:var(--bad);margin:12px 0 0}
@@ -659,8 +660,12 @@ const C = (() => {
       const b1 = num(e.basicBand) * wk / 52, b2 = num(e.higherBand) * wk / 52;
       return r2(num(e.basicRate) * Math.min(a, b1) + num(e.higherRate) * Math.min(Math.max(a - b1, 0), b2 - b1) + num(e.addRate) * Math.max(a - b2, 0));
     };
+    /* HMRC works NI thresholds out per week, rounded up to the whole pound, and
+       multiplies up for longer periods. Dividing the annual figure by 13 lands
+       a pound under the published 4-weekly threshold, which is enough to stop
+       the pennies matching the payslip. */
     const niOn = (x, e) => {
-      const PT = Math.round(num(e.niPT) / 13), UEL = Math.round(num(e.niUEL) / 13);
+      const PT = Math.ceil(num(e.niPT) / 52) * 4, UEL = Math.ceil(num(e.niUEL) / 52) * 4;
       return num(e.niMain) * Math.min(Math.max(x - PT, 0), UEL - PT) + num(e.niUpper) * Math.max(x - UEL, 0);
     };
     const nowRates = ratesOn(tod);
@@ -760,8 +765,17 @@ const C = (() => {
     const tot = k => yr.reduce((a, r) => a + num(r[k]), 0);
     const totals = { ot: tot('ot'), sun: tot('sun'), otPay: tot('otPay'), sunPay: tot('sunPay'), hpaPay: tot('hpaPay'), backpay: tot('backpay'), taxable: tot('taxable'), paye: tot('paye'), ni: tot('ni'), net: tot('net'), extra: tot('extra'), extraGross: tot('extraGross') };
     totals.keep = totals.extraGross ? totals.extra / totals.extraGross : null;
+    /* Above £100,000 HMRC takes £1 of personal allowance away for every £2
+       earned over it, and issues a smaller tax code to collect it. Payroll does
+       not work the taper out — it just applies whatever code it is given, and
+       neither does this app, because the allowance here IS the code. So all it
+       can do is say when the code on file has clearly not been updated. */
+    const paNow = num(ratesOn(tod).personalAllowance);
+    const paShould = Math.max(0, TAXDEF.personalAllowance - Math.max(0, (totals.taxable - 100000) / 2));
+    const paCheck = { taxable: totals.taxable, allowance: paNow, should: r2(paShould),
+      stale: totals.taxable > 100000 && paNow > paShould };
     let nextIdx = rows.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(rows.findIndex(r => !r.past), 0);
-    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
+    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
   /* ---------- money ---------- */
@@ -1001,6 +1015,54 @@ const C = (() => {
   }
 
   /* ---------- collections & games ---------- */
+  /* Day-to-day spending, read off the balance readings rather than typed.
+     Every balance read off the bank is logged with its date. Between one
+     reading and the next the app already knows what the bills should have
+     taken and what pay should have landed, so whatever the two cannot explain
+     is what was actually spent — shopping, fuel, the pub. `adj` carries any
+     amount the app itself took off at that point (clearing the card), so a
+     modelled payment is not mistaken for spending. */
+  function spendLog(m, p, opt, tod) {
+    tod = tod || today();
+    const has = v => v !== null && v !== undefined && v !== '';
+    const log = (m.balanceLog || [])
+      .filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on) && has(x.balance))
+      .slice().sort((a, b) => a.on.localeCompare(b.on));
+    const windows = [];
+    for (let i = 1; i < log.length; i++) {
+      const a = log[i - 1], b = log[i], days = daysBetween(a.on, b.on);
+      if (days <= 0) continue;
+      const bills = r2(billEvents(m, addDays(a.on, 1), b.on, opt).reduce((s, e) => s + e.amount, 0));
+      const pay = r2(((p && p.rows) || []).filter(r => r.payday > a.on && r.payday <= b.on)
+        .reduce((s, r) => s + num(r.net), 0));
+      const adj = num(b.adj);
+      const expected = r2(num(a.balance) - bills + pay + adj);
+      const spent = r2(expected - num(b.balance));
+      windows.push({ from: a.on, to: b.on, days, bills, pay, adj, expected,
+      /* Flagged if a pay day touches either end, not just the middle. A balance
+         read on pay day morning, before the money lands, throws the whole lot
+         into the window after it — one stretch then looks like a spree and the
+         next like a windfall. Neither is worth averaging. */
+        balance: r2(num(b.balance)), spent, perDay: r2(spent / days),
+        hasPay: ((p && p.rows) || []).some(r => r.payday >= a.on && r.payday <= b.on) });
+    }
+    /* A window with a pay day in it is not evidence of anything: the pay used
+       here is this app's estimate, so any few pounds it has the payslip wrong
+       by land in the same figure as the shopping. Those windows are still shown
+       — they are real money — but they are kept out of the average, and an
+       average over several windows beats the latest one anyway, since one week
+       with a car service in it is not what a normal week costs. */
+    const clean = windows.filter(w => !w.hasPay);
+    const recent = clean.slice(-8);
+    const days = recent.reduce((s, w) => s + w.days, 0);
+    const spent = r2(recent.reduce((s, w) => s + w.spent, 0));
+    const lastOn = log.length ? log[log.length - 1].on : null;
+    return { windows, list: windows.slice(-8), recent, clean,
+      last: clean[clean.length - 1] || null, readings: log.length,
+      days, spent, perDay: days > 0 ? r2(spent / days) : null,
+      lastOn, since: lastOn ? daysBetween(lastOn, tod) : null };
+  }
+
   function progress(items, pred) { const t = items.length, h = items.filter(pred).length; return { have: h, total: t, pct: t ? h / t : 0 }; }
   function collections(s) {
     const known = ['Base Set', 'Jungle', 'Fossil', 'Base Set 2', 'Movie Promo'];
@@ -1023,7 +1085,7 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, priceHistory, potsCalc, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, priceHistory, potsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 
 /* ===== app: state, views, events ===== */
@@ -1102,6 +1164,33 @@ function load() {
 }
 /* Encryption is async, so writes are queued rather than fired off in parallel —
    the snapshot is taken synchronously so they still land in the right order. */
+/* localStorage is best-effort: a browser short of space is allowed to throw it
+   away, and iOS clears it for sites left unopened for a week. Asking for
+   persistent storage takes this app off that list. It can be refused, so it is
+   never the only line of defence — that is what the backup nudge is for. */
+let storagePersisted = null;
+async function askPersist() {
+  try {
+    if (!navigator.storage || !navigator.storage.persist) return null;
+    storagePersisted = await navigator.storage.persisted() || await navigator.storage.persist();
+  } catch (e) { storagePersisted = null; }
+  return storagePersisted;
+}
+
+/* One reading a day. Correcting a typo an hour later replaces the reading
+   rather than inventing a window of nothing, but any adjustment the app made
+   that day is kept, or clearing the card would read as a day of spending. */
+const LOG_MAX = 120;
+function logBalance(adj) {
+  const m = S.money, on = C.today();
+  if (m.balance === null || m.balance === undefined || m.balance === '') return;
+  const last = m.balanceLog[m.balanceLog.length - 1];
+  const e = { on, balance: C.r2(C.num(m.balance)), adj: C.r2(C.num(adj) + (last && last.on === on ? C.num(last.adj) : 0)) };
+  if (last && last.on === on) m.balanceLog[m.balanceLog.length - 1] = e;
+  else m.balanceLog.push(e);
+  if (m.balanceLog.length > LOG_MAX) m.balanceLog = m.balanceLog.slice(-LOG_MAX);
+}
+
 let saveChain = Promise.resolve();
 function save(json) {
   if (!storageOK) return saveChain;
@@ -1129,6 +1218,9 @@ function normalize() {
   if (typeof m.amexBefore !== 'boolean') m.amexBefore = false;
   if (typeof m.netLongTerm !== 'boolean') m.netLongTerm = false;
   if (m.amexUndo === undefined) m.amexUndo = null;
+  if (!Array.isArray(m.balanceLog)) m.balanceLog = [];
+  m.balanceLog = m.balanceLog.filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on)).slice(-LOG_MAX);
+  if (S.backupOn === undefined) S.backupOn = null;
   if (m.balance === undefined) m.balance = null;
   if (m.balanceOn === undefined) m.balanceOn = null;
   // a balance carried over from before this feature has no date — treat it as true today
@@ -1477,8 +1569,16 @@ const VIEWS = {
     if (m.undated) attn.push(['', `<b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date</b>, so ${m.undated === 1 ? "it's" : "they're"} missing from the cash flow.`, 'bills']);
     C.priceHistory(S.money.bills).filter(x => x.last.month >= C.mkey(C.addMonths(tod, -1)))
       .forEach(x => attn.push(['', `<b>${esc(x.name)}</b> ${x.last.diff > 0 ? 'went up' : 'came down'} ${C.gbp(Math.abs(x.last.diff))} a month in ${esc(C.fmtMs(x.last.month))}.`, 'bills']));
-    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, sec]) =>
-      `<button class="attnrow ${lvl}" data-act="tab" data-tab="money" data-sec="${sec}"><span>${text}</span><i aria-hidden="true">›</i></button>`).join('')}</div>`;
+    /* The figures live on this phone and nowhere else. Say so before it matters,
+       not after — and only once there is something worth losing. */
+    const anyData = S.money.bills.length || S.money.months.length || S.money.pots.length || S.games.length || S.classic.length;
+    const backupAge = S.backupOn ? C.daysBetween(S.backupOn, tod) : null;
+    if (anyData && backupAge === null) attn.push(['', `<b>No backup yet.</b> Lose this phone and these figures go with it.`, 'settings']);
+    else if (backupAge !== null && backupAge >= 30) attn.push(['', `<b>Last backup was ${backupAge} days ago.</b> Worth downloading a fresh one.`, 'settings']);
+    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest]) => {
+      const gear = dest === 'settings';
+      return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${gear ? 'settings' : 'money'}"${gear ? '' : ` data-sec="${esc(dest)}"`}><span>${text}</span><i aria-hidden="true">›</i></button>`;
+    }).join('')}</div>`;
 
     h += `<div class="tiles">
       ${fl.hasBal
@@ -1617,6 +1717,9 @@ const VIEWS = {
                 <div class="lv">-${C.gbp(fl.amexOnPay)}${fl.hasBal ? `<small>${C.gbp(fl.afterPay)}</small>` : ''}</div></div>` : ''}` : ''); })()
       }</div>` : ''}
       <div class="sep"></div>${flowOptions()}</div>`;
+
+    /* --- 1b. what the balance readings say has actually been spent --- */
+    h += spendCard(C.spendLog(S.money, p, opt), fl);
 
     /* --- 2. disposable income per pay period --- */
     h += `<div class="card"><h2>Disposable by pay period<span class="hint">from bill dates</span></h2>
@@ -1832,6 +1935,28 @@ function pinCard() {
       ? 'A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.'
       : 'Encrypts everything stored on this device with a PIN only you know. If you forget it the data cannot be recovered, so a backup is downloaded first.'}</div></div>`;
 }
+/* Spending the app worked out for itself. Two balance readings and the bills
+   between them are enough — nothing extra is typed for this. */
+function spendCard(sp, fl) {
+  if (!sp.readings) return '';
+  if (!sp.last) return `<div class="card"><h2>Day-to-day spending</h2>
+    <div class="muted">Next time you check your bank, retype the balance. Whatever the bills and pay can't account for is what you actually spent, and it turns up here.</div></div>`;
+  const w = sp.last, avg = sp.perDay;
+  const likely = avg != null && avg > 0 && fl.hasBal && fl.days > 0 ? C.r2(avg * fl.days) : null;
+  const gap = likely === null ? null : C.r2(fl.safe - likely);
+  return `<div class="card"><h2>Day-to-day spending${avg != null && avg > 0 ? `<span class="hint">${C.gbp(avg)} a day</span>` : ''}</h2>
+    <div class="muted small mb4">Worked out from your balance readings — what the bills and pay can't account for is what you spent.</div>
+    <div class="flowhero"><div><div class="amt${w.spent < 0 ? ' pos' : ''}">${C.gbp(Math.abs(w.spent))}</div>
+      <div class="muted small">${w.spent < 0 ? 'more came in than expected' : 'spent'} between ${esc(C.fmtDM(w.from))} and ${esc(C.fmtDM(w.to))}</div></div>
+      <div class="per"><b>${C.gbp(Math.abs(w.perDay))}</b>a day</div></div>
+    ${likely !== null ? `<div class="results">
+      <div class="r"><span>Free to spend now</span><span class="num">${C.gbp(fl.safe)}</span></div>
+      <div class="r"><span>${fl.days} more day${fl.days === 1 ? '' : 's'} at ${C.gbp(avg)} a day</span><span class="num neg">-${C.gbp(likely)}</span></div>
+      <div class="r total"><span>${gap < 0 ? 'Short before pay day' : 'Spare at that rate'}</span><span class="num ${gap < 0 ? 'neg' : 'pos'}">${C.gbp(Math.abs(gap))}</span></div></div>` : ''}
+    ${sp.list.length > 1 ? `<div class="sep"></div><div class="eyebrow">Between your last checks</div>
+      <div>${sp.list.slice().reverse().map(x => `<div class="row${x.hasPay ? ' aside' : ''}"><div class="l"><b>${C.gbp(x.spent)}</b><small>${esc(C.fmtDM(x.from))} – ${esc(C.fmtDM(x.to))} · ${x.days} day${x.days === 1 ? '' : 's'}${x.hasPay ? ' · pay day' : ''}</small></div><div class="num tr">${C.gbp(x.perDay)}<div class="muted small">a day</div></div></div>`).join('')}</div>` : ''}
+    <div class="note">Only money leaving your current account counts here.${sp.list.some(x => x.hasPay) ? ' A stretch with pay day in it is left out of the average, because the pay in it is this app\'s estimate rather than your payslip.' : ''} ${sp.since ? `Your last reading was ${sp.since} day${sp.since === 1 ? '' : 's'} ago — retype the balance to bring it up to date.` : 'Read today.'}</div></div>`;
+}
 function aboutCard() {
   const m = S.money;
   const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [m.pots.length, 'pot'], [m.debts.length, 'debt'],
@@ -1840,12 +1965,20 @@ function aboutCard() {
   return `<div class="card"><h2>About</h2>
     <div class="row"><div class="l"><b>${esc(document.title)}</b><small>${storageOK ? 'Saving on this device.' : 'Not saving on this device.'}${pinIsSet() ? ' Encrypted.' : ''}</small></div></div>
     <div class="row"><div class="l"><b>On this device</b><small>${counts || 'Nothing yet — restore a backup or start typing.'}</small></div></div>
+    <div class="row"><div class="l"><b>Storage</b><small>${storagePersisted === true
+      ? 'Marked as permanent, so the browser will not clear it to free up space.'
+      : storagePersisted === false
+        ? 'The browser may clear this if the phone runs short of space. Keep a backup.'
+        : 'Saved on this device.'}</small></div></div>
     <div class="row"><div class="l"><b>Undo</b><small>The arrow in the header takes back the last change — a removed bill, a mistyped figure, even a reset — up to ${UNDO_MAX} steps, until the app is closed. Ctrl+Z on a keyboard.</small></div></div>
     <div class="note">Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Payslip settings each April.</div></div>`;
 }
 function backupCard(heading, note) {
+  const age = S.backupOn ? C.daysBetween(S.backupOn, C.today()) : null;
   return `<div class="card"><h2>${esc(heading)}</h2>
     <div class="muted">${storageOK ? 'Changes save automatically on this device.' : 'Not saving on this device.'} A backup is a small file you can restore on any phone or after a reset.</div>
+    <div class="row"><div class="l"><b>Last backup</b><small>${age === null ? "You haven't downloaded one yet." :
+      esc(C.fmtD(S.backupOn)) + (age === 0 ? ' — today' : age === 1 ? ' — yesterday' : ` — ${age} days ago`)}</small></div></div>
     <div class="btnrow"><button class="btn" data-act="export">Download backup</button><button class="btn ghost" data-act="copy">Copy backup</button>
       <button class="btn ghost" data-act="import">Restore backup</button>
       <button class="btn danger" data-act="reset">${SEED.generic ? 'Clear all data' : 'Reset to spreadsheet data'}</button></div>
@@ -1853,8 +1986,12 @@ function backupCard(heading, note) {
     <div class="note">${note}</div></div>`;
 }
 function paySettings(p) {
-  const P = S.pay;
-  return `<div class="card"><h2>Payslip settings</h2><div class="muted small">From your payslip. Hourly rate = salary ÷ weeks ÷ hours (${C.gbp(p.hourly)}/hr, basic ${C.gbp(p.basic)} a period). When your pay changes, add a line under Pay rises rather than editing the salary — that keeps past pay days as they were.</div>
+  const P = S.pay, pa = p.paCheck;
+  return `<div class="card"><h2>Payslip settings</h2>
+    ${pa && pa.stale ? `<div class="banner bad mb4"><b>Your personal allowance is too high for this year's pay.</b>
+      Over ${C.gbp(100000, 0)} HMRC takes away £1 of allowance for every £2 above it and sends a smaller tax code.
+      On ${C.gbp(pa.taxable, 0)} taxable it should be about ${C.gbp(pa.should, 0)}, not ${C.gbp(pa.allowance, 0)} —
+      change it under <b>Tax years</b> to match your code, or the tax here comes out too low.</div>` : ''}<div class="muted small">From your payslip. Hourly rate = salary ÷ weeks ÷ hours (${C.gbp(p.hourly)}/hr, basic ${C.gbp(p.basic)} a period). When your pay changes, add a line under Pay rises rather than editing the salary — that keeps past pay days as they were.</div>
     ${detailsBlock('yourpay', 'Your pay', `<div class="grid2">
       ${field('Annual basic salary', inp('pay.salary', P.salary))}${field('Contracted hours / week', inp('pay.hoursWeek', P.hoursWeek))}
       ${field('Weeks per year (payroll)', inp('pay.weeksYear', P.weeksYear))}${P.sundayAtT ? field('Sunday hours', '<input type="text" value="paid at plain time" disabled>') : field('Sunday premium £/hr', inp('pay.sundayRate', P.sundayRate))}
@@ -2048,7 +2185,7 @@ document.addEventListener('click', async e => {
     const raw = el.value.trim();
     if (raw === '' || isNaN(parseFloat(raw))) { el.focus(); toast('Type the amount first, then tap ±'); return; }
     setPath(S, el.dataset.set, -parseFloat(raw));
-    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); S.money.amexUndo = null; }
+    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); S.money.amexUndo = null; logBalance(0); }
     commit('flipping the sign'); return;
   }
   if (a === 'morePeriods') { ui.flowPeriods = ui.flowPeriods >= 12 ? 4 : ui.flowPeriods + 4; render(); return; }
@@ -2083,10 +2220,12 @@ document.addEventListener('click', async e => {
     const amt = Math.abs(C.num(S.money.amex));
     if (!amt) { toast('No card balance to clear'); return; }
     // snapshot first so this is exactly reversible
-    S.money.amexUndo = { balance: S.money.balance, balanceOn: S.money.balanceOn, amex: S.money.amex, at: C.today() };
+    S.money.amexUndo = { balance: S.money.balance, balanceOn: S.money.balanceOn, amex: S.money.amex,
+      at: C.today(), logLen: S.money.balanceLog.length };
     S.money.balance = C.r2(C.num(S.money.balance) - amt);
     S.money.balanceOn = C.today();
     S.money.amex = 0;
+    logBalance(-amt);                                  // the drop is the card, not a day out
     commit('paying the card');
     toast(`${C.gbp(amt)} off your balance — undo is right there`);
     return;
@@ -2095,6 +2234,7 @@ document.addEventListener('click', async e => {
     const u = S.money.amexUndo;
     if (!u) return;
     S.money.balance = u.balance; S.money.balanceOn = u.balanceOn; S.money.amex = u.amex;
+    if (u.logLen != null) S.money.balanceLog.length = Math.min(u.logLen, S.money.balanceLog.length);
     S.money.amexUndo = null;
     commit('putting the card back');
     toast('Put back');
@@ -2137,7 +2277,7 @@ document.addEventListener('change', e => {
   if (amt) { billAmountChanged(+amt[1], parseInput(el)); return; }
   if (el.dataset.set) {
     setPath(S, el.dataset.set, parseInput(el));
-    if (el.dataset.set === 'money.balance') S.money.balanceOn = C.today();   // stamp it so a stale figure is obvious
+    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); logBalance(0); }   // stamp it so a stale figure is obvious
     if (el.dataset.set === 'money.balance' || el.dataset.set === 'money.amex') S.money.amexUndo = null;
     commit(fieldLabel(el));
   }
@@ -2203,9 +2343,12 @@ async function billAmountChanged(i, next) {
 
 /* ---------- backup ---------- */
 function exportBackup() {
+  S.backupOn = C.today();                              // stamped before it is written, so the file records its own date
   const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }); const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = `decs-tracker-${C.today()}.json`; document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800); toast('Backup downloaded');
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+  save(); historyMark(); render();                     // downloading is not an edit, so keep it out of undo
+  toast('Backup downloaded');
 }
 function importBackup(file) {
   const rd = new FileReader();
@@ -2247,6 +2390,7 @@ function importBackup(file) {
   if (PAY_ONLY) { tab = 'pay'; $('#tabs').style.display = 'none'; document.body.classList.add('notabs'); }
   lastDay = C.today();
   render(false);
+  askPersist().then(v => { if (v !== null && tab === 'settings') render(); });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => { });
 })();
 </script>

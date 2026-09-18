@@ -31,7 +31,7 @@ before(async () => {
 after(async () => { if (browser) await browser.close(); if (server) server.close(); });
 
 const SAMPLE = {
-  version: 2, name: 'Dec',
+  version: 2, name: 'Dec', backupOn: '2026-09-08',
   money: { buffer: 300, balance: 1000, balanceOn: '2026-09-09', dueShift: 'next', bankHols: true,
     bills: [ { id: '1', name: 'Rent', category: 'Housing', amount: 780, dueDay: 1, started: '2024-01' },
              { id: '2', name: 'Council Tax', category: 'Housing', amount: 168, dueDay: 13, started: '2024-01' },
@@ -990,4 +990,103 @@ test('the highlighted pay day lines up with every other row', skip, async t => {
   const bleedL = plain.left - hot[0].left, bleedR = hot[0].right - plain.right;
   assert.ok(bleedL > 0, 'the highlight reaches past the row on the left');
   assert.equal(bleedL, bleedR, 'by the same amount on the right');
+});
+
+/* ---------- spending, backups, durable storage ---------- */
+test('retyping the balance works out what was actually spent', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [];                                   // keep the arithmetic plain
+  Object.assign(data.money, { balance: 1200, balanceOn: '2026-09-02', buffer: 0,
+    balanceLog: [{ on: '2026-09-02', balance: 1200, adj: 0 }] });
+  const page = await open(t, { on: '2026-09-09', data, tab: 'money' });
+  const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('Day-to-day spending'));
+  assert.match(await card(), /retype the balance/i, 'one reading is not enough to compare');
+
+  await page.fill('[data-set="money.balance"]', '850');
+  await page.dispatchEvent('[data-set="money.balance"]', 'change');
+  await page.waitForTimeout(350);
+  let log = await stored(page).then(s => s.money.balanceLog);
+  assert.equal(log.length, 2, 'the reading is logged');
+  assert.deepEqual(log[1], { on: '2026-09-09', balance: 850, adj: 0 });
+  let c = await card();
+  assert.match(c, /£350\.00/, '£1,200 down to £850 with no bills in between');
+  assert.match(c, /£50\.00 a day/, 'over the seven days');
+
+  // correcting it an hour later replaces the reading rather than inventing a window
+  await page.fill('[data-set="money.balance"]', '900');
+  await page.dispatchEvent('[data-set="money.balance"]', 'change');
+  await page.waitForTimeout(350);
+  log = await stored(page).then(s => s.money.balanceLog);
+  assert.equal(log.length, 2, 'still two readings');
+  assert.equal(log[1].balance, 900);
+  assert.match(await card(), /£300\.00/, 'and the figure follows the correction');
+});
+
+test('clearing the card is not counted as a day of spending', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [];
+  Object.assign(data.money, { balance: 1200, balanceOn: '2026-09-02', buffer: 0, amex: 300, amexBefore: false,
+    balanceLog: [{ on: '2026-09-02', balance: 1200, adj: 0 }] });
+  const page = await open(t, { on: '2026-09-09', data, tab: 'money' });
+  await page.click('[data-act="amexClear"]');
+  await page.waitForTimeout(400);
+  let m = await stored(page).then(s => s.money);
+  assert.equal(m.balance, 900, 'the card came off the balance');
+  assert.deepEqual(m.balanceLog[1], { on: '2026-09-09', balance: 900, adj: -300 }, 'logged with what the app took off');
+  const card = (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('Day-to-day spending'));
+  assert.match(card, /£0\.00 spent/, 'the £300 is explained, so nothing reads as spending');
+
+  await page.click('[data-act="amexUndo"]');
+  await page.waitForTimeout(400);
+  m = await stored(page).then(s => s.money);
+  assert.equal(m.balance, 1200);
+  assert.equal(m.balanceLog.length, 1, 'the undo takes the reading back out too');
+});
+
+test('Home asks for a backup, and downloading one dates it', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.backupOn = null;
+  const page = await open(t, { on: '2026-09-09', data });
+  page.on('download', d => d.delete().catch(() => { }));
+  assert.match(await page.$eval('#view', e => e.textContent), /No backup yet/);
+
+  await page.click('.attnrow:has-text("No backup yet")');
+  await page.waitForTimeout(300);
+  assert.equal(await page.$eval('#title', e => e.textContent), 'Settings', 'the row opens the place that deals with it');
+  assert.match(await page.$eval('#view', e => e.textContent), /You haven't downloaded one yet/);
+
+  await page.click('[data-act="export"]');
+  await page.waitForTimeout(500);
+  assert.equal(await stored(page).then(s => s.backupOn), '2026-09-09', 'dated');
+  assert.match(await page.$eval('#view', e => e.textContent), /Last backup.*today/);
+  assert.ok(await page.$eval('#undoBtn', e => e.hidden), 'downloading a backup is not an edit to undo');
+
+  await page.click('.tabs button[data-tab="home"]');
+  await page.waitForTimeout(250);
+  assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /No backup yet/, 'and the nudge goes');
+});
+
+test('a stale backup is nudged, a recent one is not', skip, async t => {
+  const old = JSON.parse(JSON.stringify(SAMPLE));
+  old.backupOn = '2026-07-01';
+  let page = await open(t, { on: '2026-09-09', data: old });
+  assert.match(await page.$eval('#view', e => e.textContent), /Last backup was 70 days ago/);
+
+  const fresh = JSON.parse(JSON.stringify(SAMPLE));
+  fresh.backupOn = '2026-08-25';
+  page = await open(t, { on: '2026-09-09', data: fresh });
+  assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /Last backup was/, '15 days is not worth a nag');
+});
+
+test('the app asks the browser to keep the data', skip, async t => {
+  const page = await open(t, { tab: null });
+  const asked = await page.evaluate(() => typeof navigator.storage?.persist === 'function');
+  await page.click('#settingsBtn');
+  await page.waitForTimeout(400);
+  const about = (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('About'));
+  assert.match(about, /Storage/, 'Settings says where the data stands');
+  if (asked) assert.match(about, /permanent|may clear this/, 'and what the browser said');
 });

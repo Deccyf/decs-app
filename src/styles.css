@@ -353,6 +353,7 @@ canvas{display:block}
 .searchbox{margin:12px 0 4px}
 .btnrow.end{margin:0;justify-content:flex-end}
 .semi{font-weight:600}
+.row.aside{opacity:.55}   /* shown, but not part of the figure above it */
 .warn{color:var(--warn)}
 .done{color:var(--muted);text-decoration:line-through}
 .errpre{white-space:pre-wrap;color:var(--bad);margin:12px 0 0}

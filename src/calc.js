@@ -149,8 +149,12 @@ const C = (() => {
       const b1 = num(e.basicBand) * wk / 52, b2 = num(e.higherBand) * wk / 52;
       return r2(num(e.basicRate) * Math.min(a, b1) + num(e.higherRate) * Math.min(Math.max(a - b1, 0), b2 - b1) + num(e.addRate) * Math.max(a - b2, 0));
     };
+    /* HMRC works NI thresholds out per week, rounded up to the whole pound, and
+       multiplies up for longer periods. Dividing the annual figure by 13 lands
+       a pound under the published 4-weekly threshold, which is enough to stop
+       the pennies matching the payslip. */
     const niOn = (x, e) => {
-      const PT = Math.round(num(e.niPT) / 13), UEL = Math.round(num(e.niUEL) / 13);
+      const PT = Math.ceil(num(e.niPT) / 52) * 4, UEL = Math.ceil(num(e.niUEL) / 52) * 4;
       return num(e.niMain) * Math.min(Math.max(x - PT, 0), UEL - PT) + num(e.niUpper) * Math.max(x - UEL, 0);
     };
     const nowRates = ratesOn(tod);
@@ -250,8 +254,17 @@ const C = (() => {
     const tot = k => yr.reduce((a, r) => a + num(r[k]), 0);
     const totals = { ot: tot('ot'), sun: tot('sun'), otPay: tot('otPay'), sunPay: tot('sunPay'), hpaPay: tot('hpaPay'), backpay: tot('backpay'), taxable: tot('taxable'), paye: tot('paye'), ni: tot('ni'), net: tot('net'), extra: tot('extra'), extraGross: tot('extraGross') };
     totals.keep = totals.extraGross ? totals.extra / totals.extraGross : null;
+    /* Above £100,000 HMRC takes £1 of personal allowance away for every £2
+       earned over it, and issues a smaller tax code to collect it. Payroll does
+       not work the taper out — it just applies whatever code it is given, and
+       neither does this app, because the allowance here IS the code. So all it
+       can do is say when the code on file has clearly not been updated. */
+    const paNow = num(ratesOn(tod).personalAllowance);
+    const paShould = Math.max(0, TAXDEF.personalAllowance - Math.max(0, (totals.taxable - 100000) / 2));
+    const paCheck = { taxable: totals.taxable, allowance: paNow, should: r2(paShould),
+      stale: totals.taxable > 100000 && paNow > paShould };
     let nextIdx = rows.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(rows.findIndex(r => !r.past), 0);
-    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
+    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
   /* ---------- money ---------- */
@@ -491,6 +504,54 @@ const C = (() => {
   }
 
   /* ---------- collections & games ---------- */
+  /* Day-to-day spending, read off the balance readings rather than typed.
+     Every balance read off the bank is logged with its date. Between one
+     reading and the next the app already knows what the bills should have
+     taken and what pay should have landed, so whatever the two cannot explain
+     is what was actually spent — shopping, fuel, the pub. `adj` carries any
+     amount the app itself took off at that point (clearing the card), so a
+     modelled payment is not mistaken for spending. */
+  function spendLog(m, p, opt, tod) {
+    tod = tod || today();
+    const has = v => v !== null && v !== undefined && v !== '';
+    const log = (m.balanceLog || [])
+      .filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on) && has(x.balance))
+      .slice().sort((a, b) => a.on.localeCompare(b.on));
+    const windows = [];
+    for (let i = 1; i < log.length; i++) {
+      const a = log[i - 1], b = log[i], days = daysBetween(a.on, b.on);
+      if (days <= 0) continue;
+      const bills = r2(billEvents(m, addDays(a.on, 1), b.on, opt).reduce((s, e) => s + e.amount, 0));
+      const pay = r2(((p && p.rows) || []).filter(r => r.payday > a.on && r.payday <= b.on)
+        .reduce((s, r) => s + num(r.net), 0));
+      const adj = num(b.adj);
+      const expected = r2(num(a.balance) - bills + pay + adj);
+      const spent = r2(expected - num(b.balance));
+      windows.push({ from: a.on, to: b.on, days, bills, pay, adj, expected,
+      /* Flagged if a pay day touches either end, not just the middle. A balance
+         read on pay day morning, before the money lands, throws the whole lot
+         into the window after it — one stretch then looks like a spree and the
+         next like a windfall. Neither is worth averaging. */
+        balance: r2(num(b.balance)), spent, perDay: r2(spent / days),
+        hasPay: ((p && p.rows) || []).some(r => r.payday >= a.on && r.payday <= b.on) });
+    }
+    /* A window with a pay day in it is not evidence of anything: the pay used
+       here is this app's estimate, so any few pounds it has the payslip wrong
+       by land in the same figure as the shopping. Those windows are still shown
+       — they are real money — but they are kept out of the average, and an
+       average over several windows beats the latest one anyway, since one week
+       with a car service in it is not what a normal week costs. */
+    const clean = windows.filter(w => !w.hasPay);
+    const recent = clean.slice(-8);
+    const days = recent.reduce((s, w) => s + w.days, 0);
+    const spent = r2(recent.reduce((s, w) => s + w.spent, 0));
+    const lastOn = log.length ? log[log.length - 1].on : null;
+    return { windows, list: windows.slice(-8), recent, clean,
+      last: clean[clean.length - 1] || null, readings: log.length,
+      days, spent, perDay: days > 0 ? r2(spent / days) : null,
+      lastOn, since: lastOn ? daysBetween(lastOn, tod) : null };
+  }
+
   function progress(items, pred) { const t = items.length, h = items.filter(pred).length; return { have: h, total: t, pct: t ? h / t : 0 }; }
   function collections(s) {
     const known = ['Base Set', 'Jungle', 'Fossil', 'Base Set 2', 'Movie Promo'];
@@ -513,6 +574,6 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, priceHistory, potsCalc, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, priceHistory, potsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 

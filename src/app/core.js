@@ -74,6 +74,33 @@ function load() {
 }
 /* Encryption is async, so writes are queued rather than fired off in parallel —
    the snapshot is taken synchronously so they still land in the right order. */
+/* localStorage is best-effort: a browser short of space is allowed to throw it
+   away, and iOS clears it for sites left unopened for a week. Asking for
+   persistent storage takes this app off that list. It can be refused, so it is
+   never the only line of defence — that is what the backup nudge is for. */
+let storagePersisted = null;
+async function askPersist() {
+  try {
+    if (!navigator.storage || !navigator.storage.persist) return null;
+    storagePersisted = await navigator.storage.persisted() || await navigator.storage.persist();
+  } catch (e) { storagePersisted = null; }
+  return storagePersisted;
+}
+
+/* One reading a day. Correcting a typo an hour later replaces the reading
+   rather than inventing a window of nothing, but any adjustment the app made
+   that day is kept, or clearing the card would read as a day of spending. */
+const LOG_MAX = 120;
+function logBalance(adj) {
+  const m = S.money, on = C.today();
+  if (m.balance === null || m.balance === undefined || m.balance === '') return;
+  const last = m.balanceLog[m.balanceLog.length - 1];
+  const e = { on, balance: C.r2(C.num(m.balance)), adj: C.r2(C.num(adj) + (last && last.on === on ? C.num(last.adj) : 0)) };
+  if (last && last.on === on) m.balanceLog[m.balanceLog.length - 1] = e;
+  else m.balanceLog.push(e);
+  if (m.balanceLog.length > LOG_MAX) m.balanceLog = m.balanceLog.slice(-LOG_MAX);
+}
+
 let saveChain = Promise.resolve();
 function save(json) {
   if (!storageOK) return saveChain;
@@ -101,6 +128,9 @@ function normalize() {
   if (typeof m.amexBefore !== 'boolean') m.amexBefore = false;
   if (typeof m.netLongTerm !== 'boolean') m.netLongTerm = false;
   if (m.amexUndo === undefined) m.amexUndo = null;
+  if (!Array.isArray(m.balanceLog)) m.balanceLog = [];
+  m.balanceLog = m.balanceLog.filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on)).slice(-LOG_MAX);
+  if (S.backupOn === undefined) S.backupOn = null;
   if (m.balance === undefined) m.balance = null;
   if (m.balanceOn === undefined) m.balanceOn = null;
   // a balance carried over from before this feature has no date — treat it as true today
