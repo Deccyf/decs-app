@@ -77,7 +77,8 @@ test('every tab renders in both themes without errors', skip, async t => {
     await page.waitForTimeout(150);
     assert.ok(await page.$('#view .card'), `${tab} drew a card`);
   }
-  await page.click('#themeBtn'); await page.click('#themeBtn');   // auto -> light -> dark
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  await page.click('[data-act="theme"][data-v="dark"]'); await page.waitForTimeout(200);
   assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-theme')), 'dark');
   assert.ok(await page.$('#view .card'), 'still rendering in dark');
 });
@@ -222,6 +223,7 @@ test('a repeated change event cannot split the same bill twice', skip, async t =
 
 /* ---------------------------------------------------------------- PIN lock -- */
 async function turnPinOn(page, pin) {
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
   await page.click('[data-act="setPin"]');
   await page.waitForTimeout(200);
   await page.click('#dlgForm button[value="ok"]');          // "Download a backup"
@@ -313,6 +315,7 @@ test('turning the PIN off puts the data back in the clear', skip, async t => {
 test('a short PIN is refused', skip, async t => {
   const page = await open(t);
   page.on('download', d => d.cancel().catch(() => {}));
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
   await page.click('[data-act="setPin"]');
   await page.waitForTimeout(200);
   await page.click('#dlgForm button[value="ok"]');
@@ -326,6 +329,7 @@ test('a short PIN is refused', skip, async t => {
 test('mismatched confirmation leaves the PIN off', skip, async t => {
   const page = await open(t);
   page.on('download', d => d.cancel().catch(() => {}));
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
   await page.click('[data-act="setPin"]');
   await page.waitForTimeout(200);
   await page.click('#dlgForm button[value="ok"]');
@@ -385,6 +389,7 @@ test('the PIN is set once, not re-configured each time', skip, async t => {
     await page.fill('#pinIn', '482913');
     await page.click('#lockGo');
     await page.waitForSelector('#view .card', { timeout: 8000 });
+    await page.click('#settingsBtn'); await page.waitForTimeout(200);
     assert.match(await page.$eval('#view', e => e.textContent), /PIN lock/);
   }
   // still the same PIN, never re-set
@@ -693,4 +698,24 @@ test('Money is split into sections, each a screen or two', skip, async t => {
   await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(250);
   await page.click('[data-act="tab"][data-tab="money"][data-sec="now"]'); await page.waitForTimeout(250);
   assert.equal((await heads())[0], 'Left until pay day');
+});
+
+test('the gear opens Settings: theme, PIN, backup and what is on the device', skip, async t => {
+  const page = await open(t);
+  assert.equal(await page.$$eval('#view .card h2', es => es.filter(e => /Settings & backup/.test(e.textContent)).length), 0,
+    'Home no longer carries the settings card');
+  await page.click('#settingsBtn'); await page.waitForTimeout(250);
+  const heads = await page.$$eval('#view .card h2', es => es.map(e => e.firstChild.textContent.trim()));
+  assert.deepEqual(heads, ['Appearance', 'PIN lock', 'Backup', 'About']);
+  assert.ok(await page.$eval('#settingsBtn', e => e.classList.contains('on')), 'the gear shows it is open');
+  assert.equal(await page.$$eval('.tabs button.on', e => e.length), 0, 'no bottom tab is lit');
+
+  await page.click('[data-act="theme"][data-v="light"]'); await page.waitForTimeout(200);
+  assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-theme')), 'light');
+  assert.equal(await page.evaluate(() => localStorage.getItem('decs-stuff-v1:theme')), 'light', 'remembered');
+  await page.click('[data-act="theme"][data-v="auto"]'); await page.waitForTimeout(200);
+  assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-theme')), null, 'auto clears it');
+
+  assert.match(await page.$eval('#view', e => e.textContent), /3 bills · 2 months · 1 debt · 1 house job · 1 card · 1 game/);
+  assert.ok(await page.$('[data-act="export"]') && await page.$('[data-act="import"]') && await page.$('[data-act="setPin"]'));
 });

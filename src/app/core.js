@@ -19,11 +19,6 @@ const TABS = [
   { k: 'lists', l: 'Lists', d: 'M10 6.5h10M10 12h10M10 17.5h10M3.5 6.3l1.2 1.2 2.3-2.4M3.5 11.8l1.2 1.2 2.3-2.4M3.5 17.3l1.2 1.2 2.3-2.4' },
   { k: 'games', l: 'Games', d: 'M7.5 12h3.2M9.1 10.4v3.2M15.4 11.3h.01M17.9 13.2h.01M8.6 6.2h6.8a5.4 5.4 0 0 1 5.3 6.4l-.8 4.1a2.9 2.9 0 0 1-5 1.5l-.9-1a2 2 0 0 0-1.5-.7h-1a2 2 0 0 0-1.5.7l-.9 1a2.9 2.9 0 0 1-5-1.5l-.8-4.1a5.4 5.4 0 0 1 5.3-6.4Z' }
 ];
-const ICON = {
-  auto: 'M12 3v18M12 3a9 9 0 0 1 0 18 9 9 0 0 1 0-18Z',
-  light: 'M12 4.2V2.5M12 21.5v-1.7M19.8 12h1.7M2.5 12h1.7M17.5 6.5l1.2-1.2M5.3 18.7l1.2-1.2M17.5 17.5l1.2 1.2M5.3 5.3l1.2 1.2M12 7.6a4.4 4.4 0 1 1 0 8.8 4.4 4.4 0 0 1 0-8.8Z',
-  dark: 'M20.5 14.3A8.6 8.6 0 0 1 9.7 3.5a8.6 8.6 0 1 0 10.8 10.8Z'
-};
 const svg = (d, w) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w || 1.8}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 
 /* ---------- PIN lock ----------
@@ -162,18 +157,16 @@ let toastT; function toast(m) { const t = $('#toast'); t.textContent = m; t.clas
 function applyTheme() {
   const root = document.documentElement;
   if (theme === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', theme);
-  const btn = $('#themeBtn');
-  if (btn) { btn.innerHTML = svg(ICON[theme], 1.9); btn.setAttribute('aria-label', `Theme: ${theme}. Tap to change`); btn.title = `Theme: ${theme}`; }
   requestAnimationFrame(() => {
     const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
     const mt = $('#themeColor'); if (mt && bg) mt.setAttribute('content', bg);
   });
 }
-function cycleTheme() {
-  theme = theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto';
+function setTheme(v) {
+  if (!['auto', 'light', 'dark'].includes(v)) return;
+  theme = v;
   try { localStorage.setItem(THEME_KEY, theme); } catch (e) { }
-  applyTheme(); drawChart();
-  toast(`Theme: ${theme}`);
+  applyTheme(); render();
 }
 
 /* ---------- dialogs (replaces prompt/confirm, which mobile browsers can block) ---------- */

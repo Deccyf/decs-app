@@ -19,6 +19,7 @@ function render(keepScroll = true) {
     const on = b.dataset.tab === tab;
     b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
+  $('#settingsBtn').classList.toggle('on', tab === 'settings');
   drawChart();
   window.scrollTo(0, keepScroll ? y : 0);
 }
@@ -35,7 +36,7 @@ document.addEventListener('click', async e => {
   if (!S && a !== 'forgotPin') return;                 // still locked; nothing to act on
   if (a === 'tab') { tab = d.tab; if (d.sec) ui.moneyTab = d.sec; render(false); return; }
   if (a === 'moneyTab') { ui.moneyTab = d.v; render(false); return; }
-  if (a === 'theme') { cycleTheme(); return; }
+  if (a === 'theme') { setTheme(d.v); return; }
   if (a === 'pick') { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; render(false); return; }
   if (a === 'yeartoggle') { ui.openYears[d.y] = !ui.openYears[d.y]; render(); return; }
   if (a === 'hstep') { const h = S.pay.hours[d.payday] = S.pay.hours[d.payday] || {}; h[d.kind] = Math.max(0, C.num(h[d.kind]) + (+d.d)); if (!h.ot && !h.sun) delete S.pay.hours[d.payday]; commit(); return; }

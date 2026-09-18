@@ -15,15 +15,31 @@ function nextMonthKey() {
   const last = ms.length ? ms.map(x => x.month).sort().pop() : null;
   return last ? C.mkey(C.addMonths(last + '-01', 1)) : C.mkey(C.today());
 }
-function backupCard(heading, note) {
-  return `<div class="card"><h2>${esc(heading)}</h2>
-    ${CRYPTO_OK ? `<div class="row"><div class="l"><b>PIN lock</b><small>${pinIsSet()
-      ? 'On — everything on this device is encrypted, and the PIN is needed to open the app.'
-      : 'Off — anyone who can unlock this phone can read your figures.'}</small></div>
+function pinCard() {
+  if (!CRYPTO_OK) return '';
+  return `<div class="card"><h2>PIN lock<span class="hint">${pinIsSet() ? 'on' : 'off'}</span></h2>
+    <div class="row"><div class="l"><b>${pinIsSet() ? 'Encrypted on this device' : 'Not set'}</b><small>${pinIsSet()
+      ? 'The PIN is needed to open the app, and again after five minutes in the background.'
+      : 'Anyone who can unlock this phone can read your figures.'}</small></div>
       <div class="btnrow end">${pinIsSet()
         ? '<button class="btn ghost sm" data-act="changePin">Change</button><button class="btn danger sm" data-act="clearPin">Turn off</button>'
         : '<button class="btn sm" data-act="setPin">Set a PIN</button>'}</div></div>
-    ${pinIsSet() ? '<div class="note">A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.</div>' : ''}` : ''}
+    <div class="note">${pinIsSet()
+      ? 'A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.'
+      : 'Encrypts everything stored on this device with a PIN only you know. If you forget it the data cannot be recovered, so a backup is downloaded first.'}</div></div>`;
+}
+function aboutCard() {
+  const m = S.money;
+  const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [m.pots.length, 'pot'], [m.debts.length, 'debt'],
+    [S.house.length, 'house job'], [S.classic.length + S.mega.length, 'card'], [S.psm.length, 'magazine'], [S.games.length, 'game']]
+    .filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`).join(' · ');
+  return `<div class="card"><h2>About</h2>
+    <div class="row"><div class="l"><b>${esc(document.title)}</b><small>${storageOK ? 'Saving on this device.' : 'Not saving on this device.'}${pinIsSet() ? ' Encrypted.' : ''}</small></div></div>
+    <div class="row"><div class="l"><b>On this device</b><small>${counts || 'Nothing yet — restore a backup or start typing.'}</small></div></div>
+    <div class="note">Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Settings each April.</div></div>`;
+}
+function backupCard(heading, note) {
+  return `<div class="card"><h2>${esc(heading)}</h2>
     <div class="muted">${storageOK ? 'Changes save automatically on this device.' : 'Not saving on this device.'} A backup is a small file you can restore on any phone or after a reset.</div>
     <div class="btnrow"><button class="btn" data-act="export">Download backup</button><button class="btn ghost" data-act="copy">Copy backup</button>
       <button class="btn ghost" data-act="import">Restore backup</button>

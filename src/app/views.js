@@ -113,7 +113,6 @@ const VIEWS = {
       ${g.last ? `<div class="row mt4"><div class="l"><b>${esc(g.last.game)}</b><small>last completed · ${esc(C.fmtD(g.last.date))} · ${g.daysSince} days ago</small></div></div>` : ''}
       ${recent(4)}</div>`;
 
-    h += backupCard('Settings & backup', `Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Settings each April.`);
     return { title: `${S.name || 'Dec'}'s Tracker`, sub: C.fmtD(C.today()), html: h };
   },
 
@@ -353,6 +352,16 @@ const VIEWS = {
       <div class="field searchbox"><input type="search" id="search" placeholder="Search…" aria-label="Search this collection" value="${esc(ui.search)}"></div>
       <div id="ticklist">${tickList()}</div></div>`;
     return { title: 'Lists', sub: 'house jobs · collections', html: h };
+  },
+
+  settings() {
+    let h = `<div class="card"><h2>Appearance</h2>
+      ${segment('theme', theme, [{ v: 'auto', l: 'Auto' }, { v: 'light', l: 'Light' }, { v: 'dark', l: 'Dark' }])}
+      <div class="note">Auto follows your phone's own light or dark setting.</div></div>`;
+    h += pinCard();
+    h += backupCard('Backup', 'A backup is plain JSON: restore it on any phone, or keep it as insurance against the browser clearing its storage.');
+    h += aboutCard();
+    return { title: 'Settings', sub: storageOK ? 'saving on this device' : 'not saving on this device', html: h };
   },
 
   games() {
