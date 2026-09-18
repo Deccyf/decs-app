@@ -742,3 +742,19 @@ test('the chart still draws after an edit in History', skip, async t => {
   await page.waitForTimeout(350);
   assert.ok(await drawn(), 'and again after the redraw, from the rows the view handed over');
 });
+
+test('the Pay tab keeps its payslip, board, holiday pay and settings', skip, async t => {
+  const page = await open(t, { tab: 'pay' });
+  const heads = await page.$$eval('#view .card h2', es => es.map(e => e.firstChild.textContent.trim()));
+  assert.deepEqual(heads, ['Pay days', 'EU Holiday Pay', 'Payslip settings']);
+  assert.equal(await page.$$eval('.step input', e => e.length), 2, 'overtime and Sunday steppers');
+  const rows = await page.$$eval('.results .r', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+  for (const label of ['Basic pay', 'Overtime pay', 'Taxable pay', 'PAYE', 'National Insurance', 'Net pay', 'Extra from overtime'])
+    assert.ok(rows.some(r => r.startsWith(label)), label + ' is still shown');
+  assert.ok((await page.$$('.brow')).length >= 10, 'the pay-day board is there');
+  assert.equal(await page.isVisible('[data-set="pay.salary"]'), false, 'settings are folded away until opened');
+  await page.click('details[data-key="yourpay"] summary'); await page.waitForTimeout(150);
+  assert.equal(await page.isVisible('[data-set="pay.salary"]'), true, 'and open on a tap');
+  await page.click('[data-act="hstep"][data-kind="ot"][data-d="1"]'); await page.waitForTimeout(300);
+  assert.equal(await page.$eval('[data-hours="ot"]', e => e.value), '1', 'logging hours still works');
+});

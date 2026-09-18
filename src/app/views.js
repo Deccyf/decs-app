@@ -121,46 +121,14 @@ const VIEWS = {
     let idx = ui.payday ? p.rows.findIndex(x => x.payday === ui.payday) : -1;
     if (idx < 0) idx = p.nextIdx;
     const r = p.rows[idx];
-    if (!r) return { title: 'Pay', sub: '', html: `<div class="card"><h2>No pay schedule</h2><div class="muted">Add your salary and next pay day in Settings below.</div></div>` + paySettings(p) };
-    const res = (l, v, cls = '') => `<div class="r ${cls}"><span>${esc(l)}</span><span class="num">${v}</span></div>`;
+    if (!r) return { title: 'Pay', sub: '', html: `<div class="card"><h2>No pay schedule</h2><div class="muted">Add your salary and next pay day under Payslip settings below.</div></div>` + paySettings(p) };
     let h = '';
-    if (PAY_ONLY && SEED.generic && !S.pay.salary) h += `<div class="banner"><b>No data loaded yet.</b> Scroll to Backup at the bottom, tap <b>Restore backup</b> and pick your data file. Your pay settings and hours appear straight away.</div>`;
+    if (PAY_ONLY && SEED.generic && !S.pay.salary) h += `<div class="banner"><b>No data loaded yet.</b> Tap the gear at the top, then <b>Restore backup</b> and pick your data file. Your pay settings and hours appear straight away.</div>`;
     if (PAY_ONLY && !storageOK) h += `<div class="banner bad"><b>This device isn't keeping changes.</b> Open this file in Chrome rather than a file viewer, or host it, so it can save.</div>`;
-    h += `<div class="card"><div class="eyebrow">${r.next ? 'Next pay day' : r.past ? 'Paid' : 'Pay day'}${r.next ? '<span class="tag">NEXT</span>' : ''}</div>
-      <div class="payhead"><div class="big">${esc(C.fmtD(r.payday))}</div><div class="muted mono">${esc(C.fmtDM(r.start))} – ${esc(C.fmtDM(r.end))}</div></div>
-      <div class="hours">${stepper('Overtime hours', r.payday, 'ot', r.ot)}${stepper('Sunday hours', r.payday, 'sun', r.sun)}</div>
-      <div class="results">
-        ${res('Basic pay', C.gbp(r.basic))}${r.allow ? res('Allowances', C.gbp(r.allow)) : ''}
-        ${res('Overtime pay', C.gbp(r.otPay))}${res(SUN, C.gbp(r.sunPay))}${r.backpay ? res('Backpay (estimate)', C.gbp(r.backpay)) : ''}${r.hpaPay ? res('EU Holiday Pay' + (S.pay.hpaHistory[String(+r.refYear - 1)] != null && S.pay.hpaHistory[String(+r.refYear - 1)] !== '' ? '' : ' (estimate)'), C.gbp(r.hpaPay)) : ''}${r.sacr ? res('Salary sacrifice', '-' + C.gbp(r.sacr)) : ''}
-        ${res('Taxable pay', C.gbp(r.taxable))}${res('PAYE', '-' + C.gbp(r.paye))}${res('National Insurance', '-' + C.gbp(r.ni))}${r.after ? res('After-tax deductions', '-' + C.gbp(r.after)) : ''}
-        ${res('Net pay', C.gbp(r.net), 'total')}
-        ${res('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}
-      </div></div>`;
-    h += `<div class="card board"><h2>Pay days</h2><div class="muted small mb4">Tap a year to open or close it, then tap a pay day to log hours for it.</div>
-      ${(() => {
-        const groups = [];
-        p.rows.forEach((x, i) => { const y = x.payday.slice(0, 4); let g = groups[groups.length - 1];
-          if (!g || g.y !== y) groups.push(g = { y, rows: [] }); g.rows.push({ x, i }); });
-        const thisYear = C.today().slice(0, 4), selYear = r.payday.slice(0, 4);
-        groups.forEach(g => { if (ui.openYears[g.y] === undefined) ui.openYears[g.y] = (g.y === thisYear || g.y === selYear); });
-        return groups.map(g => {
-          const open = !!ui.openYears[g.y], logged = g.rows.filter(({ x }) => x.ot || x.sun).length;
-          const head = `<button class="yearhdr" data-act="yeartoggle" data-y="${g.y}" aria-expanded="${open}"><span>${g.y}</span><span class="ym">${logged ? logged + ' with hours · ' : ''}${g.rows.length} pay days<i aria-hidden="true">${open ? '−' : '+'}</i></span></button>`;
-          if (!open) return head;
-          return head + g.rows.map(({ x, i }) => `<button class="brow ${x.past ? 'past' : ''} ${x.next ? 'nextpd' : ''} ${i === idx ? 'sel' : ''}" data-act="pick" data-payday="${x.payday}"${i === idx ? ' aria-current="true"' : ''}>
-            <span class="bl"><span class="d">${esc(C.fmtD(x.payday))}${x.next ? '<span class="tag">NEXT</span>' : ''}</span><span class="pr">${esc(C.fmtDM(x.start))} – ${esc(C.fmtDM(x.end))}</span></span>
-            <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
-            <span class="n">${C.gbp(x.net, 0)}${x.extraGross ? `<span class="muted small">+${C.gbp(x.extra, 0)}</span>` : ''}</span></button>`).join('');
-        }).join('');
-      })()}
-      <div class="row" style="margin-top:8px"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h overtime · ${p.totals.sun}h Sunday · ${C.gbp(p.totals.extraGross, 0)} gross extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
-    </div>`;
-    h += `<div class="card"><h2>EU Holiday Pay</h2><div class="muted small mb4">Southeastern's Holiday Pay Adjustment: 4/52 of a calendar year's overtime and Sunday pay, paid on the first pay day in March of the next year. Taxed and NI'd like normal pay.</div>
-      ${p.hpa.filter(y => y.received != null || y.qualifying > 0 || y.year === C.today().slice(0, 4)).map(y => `<div class="row"><div class="l"><b>${esc(y.year)}</b><small>${y.received != null ? 'received ' + (y.payday ? esc(C.fmtD(y.payday)) : '') : (y.qualifying != null ? C.gbp(y.qualifying) + ' qualifying · ' + y.logged + ' of ' + y.periods + ' periods with hours · due ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : '')}</small></div>
-        <div class="num tr"><b>${C.gbp(y.gross)}</b>${y.gross ? `<div class="muted small">≈ ${C.gbp(y.net, 0)} after tax</div>` : ''}</div></div>`).join('') || '<div class="empty">Log some hours and the estimate appears here.</div>'}
-      <div class="note">What counts: overtime, rest day working, Sunday working/premiums, night and higher-grade payments. Basic pay and London Allowance don't. The estimate only covers periods with hours logged here.</div></div>`;
+    h += payslipCard(r);
+    h += payBoard(p, idx, r);
+    h += hpaCard(p);
     h += paySettings(p);
-    if (PAY_ONLY) h += backupCard('Backup', `Tax and NI rates are HMRC's 2026/27 figures (England, Wales & NI, category A). Update them in Settings each April.`);
     return { title: PAY_ONLY ? (SEED.title || 'Pay') : 'Pay', sub: `${C.gbp(p.hourly)}/hr · 4-weekly`, html: h };
   },
 

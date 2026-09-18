@@ -332,7 +332,7 @@ canvas{display:block}
    =================================================================== */
 .tr{text-align:right}
 .mt2{margin-top:2px}.mt4{margin-top:4px}.mt10{margin-top:10px}.mt12{margin-top:12px}.mt14{margin-top:14px}
-.mb4{margin-bottom:4px}.my8{margin:8px 0}
+.mb4{margin-bottom:4px}.my8{margin:8px 0}.mt8{margin-top:8px}
 .lead{margin:6px 0 10px}
 .searchbox{margin:12px 0 4px}
 .btnrow.end{margin:0;justify-content:flex-end}
