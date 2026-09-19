@@ -29,6 +29,9 @@ const C = (() => {
     return (v < 0 ? '-£' : '£') + a;
   };
   const pct = v => (v === null || v === undefined || isNaN(v)) ? '–' : Math.round(v * 100) + '%';
+  /* An interest rate is not a savings percentage: 4.1% rounded to 4% is a
+     different mortgage. Trailing zeros still go, so 5% stays 5%. */
+  const rate = v => (v === null || v === undefined || isNaN(v)) ? '–' : +(v * 100).toFixed(2) + '%';
 
   /* ---------- working days & UK bank holidays ----------
      Direct debits and standing orders only move on working days. A bill dated a
@@ -315,13 +318,16 @@ const C = (() => {
     const thisMonthKey = mkey(tod);
     const debtCalc = debts.map(d => {
       const now = debtNow(d, m, tod, opt);
-      return { ...d, balance: now.balance, now, payoff: debtPayoff({ ...d, balance: now.balance }, tod) };
+      // a fixed rate runs out on a month you already know; after that the figures here are guesswork
+      const rateDue = /^\d{4}-\d{2}$/.test(d.rateEnds || '') && d.rateEnds <= thisKey ? d.rateEnds : null;
+      return { ...d, balance: now.balance, now, rateDue, payoff: debtPayoff({ ...d, balance: now.balance }, tod) };
     });
     const debtTotal = debtCalc.reduce((a, d) => a + num(d.balance), 0);
     const repayTotal = debts.reduce((a, d) => a + num(d.repayment), 0);
     const st = debtCalc.filter(d => d.type === 'Short-term');
     const stClear = st.map(d => d.payoff).filter(x => x && x.date).map(x => x.date).sort().pop() || null;
     return { bills, active, activeTotal, yearTotal, anySkips, reviews: active.filter(b => b.dueReview),
+      rateReviews: debtCalc.filter(d => d.rateDue), noRateDebts: debtCalc.filter(d => d.now.noRate),
       dated, undated: active.length - dated.length, byCat, months,
       byYear: Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year)), latest, yearRow, thisMonthKey,
       debts: debtCalc, debtTotal, repayTotal, stClear, last12: last12(months, latest) };
@@ -342,7 +348,13 @@ const C = (() => {
   function debtNow(d, m, tod, opt) {
     tod = tod || today();
     const typed = r2(num(d.balance)), on = d.balanceOn || null, pay = num(d.repayment);
-    const out = { typed, on, balance: typed, paid: 0, interest: 0, payments: 0, carried: false, cleared: false };
+    /* A blank APR is not the same as nought per cent. Left blank, the whole
+       repayment would come off the balance and a mortgage would look like it
+       was clearing twice as fast as it is, so it is flagged rather than
+       guessed at. Type 0 for a genuine 0% deal and the flag goes. */
+    const noRate = d.apr === null || d.apr === undefined || d.apr === '';
+    const out = { typed, on, balance: typed, paid: 0, interest: 0, payments: 0,
+      carried: false, cleared: false, noRate: false };
     if (!typed || !on || on >= tod || !pay) return out;
     // a bill funding this kind of debt says which day the money really leaves
     const bill = (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
@@ -363,6 +375,7 @@ const C = (() => {
     });
     out.balance = Math.max(0, bal);
     out.carried = out.payments > 0;
+    out.noRate = out.carried && noRate;
     out.cleared = out.balance === 0 && out.carried;
     return out;
   }
@@ -641,7 +654,7 @@ const C = (() => {
     return { thisYear: byYear[y] || 0, lastYear: byYear[y - 1] || 0, byYear, last, daysSince: last ? daysBetween(last.date, tod) : null, total: (games || []).length };
   }
 
-  return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
+  return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct, rate,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
     payCalc, moneyCalc, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();

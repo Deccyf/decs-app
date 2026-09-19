@@ -95,6 +95,8 @@ const VIEWS = {
     if (anyData && backupAge === null) attn.push(['', `<b>No backup yet.</b> Lose this phone and these figures go with it.`, 'settings']);
     else if (backupAge !== null && backupAge >= 30) attn.push(['', `<b>Last backup was ${backupAge} days ago.</b> Worth downloading a fresh one.`, 'settings']);
     m.reviews.forEach(b => attn.push(['', `<b>${esc(b.name || 'A bill')} changes in ${esc(C.MON[b.review - 1])}.</b> Check the new amount — it is still down as ${C.gbp(b.amt)}.`, 'bills']));
+    m.rateReviews.forEach(d => attn.push(['', `<b>${esc(d.name || 'A debt')}: fixed rate ended ${esc(C.fmtM(d.rateEnds))}.</b> The figures still assume ${C.rate(d.apr)}.`, 'saving']));
+    m.noRateDebts.forEach(d => attn.push(['bad', `<b>${esc(d.name || 'A debt')} has no APR.</b> It is dropping by the full repayment with no interest — add the rate.`, 'saving']));
     if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest]) => {
       const gear = dest === 'settings';
       return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${gear ? 'settings' : 'money'}"${gear ? '' : ` data-sec="${esc(dest)}"`}><span>${text}</span><i aria-hidden="true">›</i></button>`;
@@ -346,13 +348,21 @@ const VIEWS = {
 
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>
+      ${m.rateReviews.map(d => `<div class="banner mt12"><b>${esc(d.name || 'A debt')}: the fixed rate ended ${esc(C.fmtM(d.rateEnds))}.</b>
+        Everything below still assumes ${C.rate(d.apr)}. Put the new rate and the balance off your statement in, and set the next end date.
+        <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editDebts">Update it</button></div></div>`).join('')}
+      ${m.noRateDebts.map(d => `<div class="banner bad mt12"><b>${esc(d.name || 'A debt')} has no APR.</b>
+        It is being carried forward with the whole ${C.gbp(d.repayment)} coming off the balance and no interest going back on,
+        which flatters it badly on anything that charges interest. Put the rate in, or type 0 for a genuine 0% deal.</div>`).join('')}
       ${ui.editDebts ? m.debts.map((d, i) => `<div class="erow">${field('Debt', inp(`money.debts.${i}.name`, d.name, 'text'))}${field('Type', sel(`money.debts.${i}.type`, d.type, ['Short-term', 'Long-term']))}
           ${field(d.now.on ? `Balance (${C.fmtDM(d.now.on)})` : 'Balance', inp(`money.debts.${i}.balance`, d.now.typed || null))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment))}
-          ${field('APR % (optional)', pctInp(`money.debts.${i}.apr`, d.apr))}${field('Balance true on', inp(`money.debts.${i}.balanceOn`, d.now.on, 'date'))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
+          ${field('APR %', pctInp(`money.debts.${i}.apr`, d.apr))}${field('Balance true on', inp(`money.debts.${i}.balanceOn`, d.now.on, 'date'))}
+          ${field('Fixed rate ends', inp(`money.debts.${i}.rateEnds`, d.rateEnds, 'month'))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
         : m.debts.map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b><small>${esc(d.type)} · ${C.gbp(d.repayment)}/month${d.payoff ? d.payoff.never ? ' · repayment below interest' : ' · clear by ' + esc(C.fmtM(d.payoff.date)) + (d.payoff.naive ? ' (no interest)' : '') : ''}${d.now.cleared ? ' · <b class="pos">cleared</b>' : ''}</small></div>
-          <div class="num tr"><b>${C.gbp(d.balance)}</b>${d.now.carried ? `<div class="muted small">${C.gbp(d.now.typed, 0)} on ${esc(C.fmtDM(d.now.on))} · ${d.now.payments} paid</div>` : ''}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
+          <div class="num tr"><b>${C.gbp(d.balance)}</b>${d.now.carried ? `<div class="muted small">${C.gbp(d.now.typed, 0)} on ${esc(C.fmtDM(d.now.on))} · ${d.now.payments} paid · ${
+            d.now.noRate ? '<span class="warn">no APR set</span>' : d.now.interest ? C.gbp(d.now.interest, 0) + ' interest' : 'no interest'}</div>` : ''}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editDebts">${ui.editDebts ? 'Done' : 'Edit debts'}</button>${ui.editDebts ? '<button class="btn sm" data-act="addDebt">Add debt</button>' : ''}</div>
-      <div class="note">Type a balance straight off the statement and the app carries it forward on its own: every repayment due since comes off it, and interest goes back on at a twelfth of the APR. The date it was true is kept underneath, so retype it when the next statement lands and it starts again from there.
+      <div class="note">Nothing moves until you give a balance a date: type one off a statement and the app carries it forward from there, with every repayment due since coming off it and interest going back on at a twelfth of the APR — so a mortgage drops by far less than the repayment, not by the whole of it. Change the rate and any fixed-term reminder is cleared, ready for the new end date. The date it was true is kept underneath, so retype it when the next statement lands and it starts again from there.
       Repayment dates come from the bill that funds them where there is one, otherwise the same day each month.
       Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
     }

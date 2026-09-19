@@ -173,7 +173,11 @@ function normalize() {
     if (!Array.isArray(b.skip)) b.skip = [];
     b.skip = [...new Set(b.skip.map(x => Math.round(C.num(x))).filter(x => x >= 1 && x <= 12))].sort((x, y) => x - y);
   });
-  m.debts.forEach(d => { if (!d.id) d.id = uid(); if (d.balanceOn === undefined) d.balanceOn = null; });
+  m.debts.forEach(d => {
+    if (!d.id) d.id = uid();
+    if (d.balanceOn === undefined) d.balanceOn = null;
+    if (!/^\d{4}-\d{2}$/.test(d.rateEnds || '')) d.rateEnds = null;
+  });
   m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
      Unsorted rows make "latest month" and the chart wrong; duplicates double

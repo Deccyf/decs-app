@@ -1280,3 +1280,68 @@ test('typing the new price answers the yearly check on its own', skip, async t =
   await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(300);
   assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /Check what it has gone to/);
 });
+
+test('the mortgage shows what interest did to it, not just the repayment', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.debts = [{ id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08,
+    repayment: 958.41, apr: 0.041, balanceOn: '2027-01-10', rateEnds: '2029-01' }];
+  const page = await open(t, { on: '2027-04-10', data, tab: 'money', sec: 'saving' });
+  const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('Total owed'));
+  const c = await card();
+  assert.match(c, /£196,719\.06/, 'three payments and three months of interest');
+  assert.match(c, /£197,572 on 10 Jan · 3 paid · £2,022 interest/, 'and it says so on the row');
+  assert.ok(!/£194,696/.test(c), 'never the full repayment coming off');
+  assert.doesNotMatch(c, /no APR/, 'the rate is set, so nothing to warn about');
+  assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /fixed rate ended/, 'the fix still has years to run');
+});
+
+test('a debt carried with no APR says so loudly', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.debts = [{ id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08,
+    repayment: 958.41, apr: null, balanceOn: '2027-01-10' }];
+  const page = await open(t, { on: '2027-04-10', data });
+  assert.match(await page.$eval('#view', e => e.textContent), /Mortgage has no APR/, 'flagged on Home');
+
+  await page.click('.attnrow:has-text("has no APR")'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('#view', e => e.textContent), /type 0 for a genuine 0% deal/);
+  assert.match(await page.$eval('#view', e => e.textContent), /no APR set/, 'and on the row itself');
+
+  // putting the rate in settles it and changes the figure
+  await page.click('[data-act="toggle"][data-key="editDebts"]'); await page.waitForTimeout(250);
+  await page.fill('[data-set="money.debts.0.apr"]', '4.1');
+  await page.dispatchEvent('[data-set="money.debts.0.apr"]', 'change'); await page.waitForTimeout(350);
+  assert.equal(await stored(page).then(s => s.money.debts[0].apr), 0.041);
+  await page.click('[data-act="toggle"][data-key="editDebts"]'); await page.waitForTimeout(300);
+  const c = (await page.$$eval('#view .card', cs => cs.map(x => x.textContent.replace(/\s+/g, ' '))))
+    .find(x => x.includes('Total owed'));
+  assert.doesNotMatch(c, /no APR/);
+  assert.match(c, /£196,719\.06/, 'and the balance is the honest one');
+});
+
+test('a fixed rate running out asks for the new one', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.debts = [{ id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08,
+    repayment: 958.41, apr: 0.041, balanceOn: '2027-09-01', rateEnds: '2027-09' }];
+  const page = await open(t, { on: '2027-09-20', data });
+  assert.match(await page.$eval('#view', e => e.textContent), /fixed rate ended Sep 2027/);
+  assert.match(await page.$eval('#view', e => e.textContent), /still assume 4\.1%/, 'the real rate, not 4% rounded');
+
+  await page.click('.attnrow:has-text("fixed rate ended")'); await page.waitForTimeout(300);
+  assert.equal(await page.$eval('#title', e => e.textContent), 'Money');
+  assert.match(await page.$eval('#view', e => e.textContent), /Put the new rate and the balance off your statement in/);
+
+  await page.click('[data-act="toggle"][data-key="editDebts"]'); await page.waitForTimeout(250);
+  assert.equal(await page.$eval('[data-set="money.debts.0.rateEnds"]', e => e.value), '2027-09', 'the end month is editable');
+  await page.fill('[data-set="money.debts.0.apr"]', '5.3');
+  await page.dispatchEvent('[data-set="money.debts.0.apr"]', 'change'); await page.waitForTimeout(350);
+  const d = await stored(page).then(s => s.money.debts[0]);
+  assert.equal(d.apr, 0.053, 'the new rate is in');
+  assert.equal(d.rateEnds, null, 'and the old reminder is cleared, ready for the next end date');
+
+  await page.fill('[data-set="money.debts.0.rateEnds"]', '2029-09');
+  await page.dispatchEvent('[data-set="money.debts.0.rateEnds"]', 'change'); await page.waitForTimeout(350);
+  assert.equal(await stored(page).then(s => s.money.debts[0].rateEnds), '2029-09', 'the next fix is recorded');
+  await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(250);
+  assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /fixed rate ended/);
+});

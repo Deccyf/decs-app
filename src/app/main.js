@@ -52,7 +52,13 @@ function render(keepScroll = true) {
 }
 function parseInput(el) {
   if (el.type === 'checkbox') return el.checked;
-  if (el.type === 'number') { if (el.value === '') return null; const v = parseFloat(el.value); if (isNaN(v)) return null; return el.dataset.kind === 'pct' ? v / 100 : v; }
+  if (el.type === 'number') {
+    if (el.value === '') return null;
+    const v = parseFloat(el.value);
+    if (isNaN(v)) return null;
+    // 4.1 / 100 is 0.040999999999999995 in binary, which is what would get stored
+    return el.dataset.kind === 'pct' ? Math.round(v * 1e4) / 1e6 : v;
+  }
   return el.value === '' ? null : el.value;
 }
 
@@ -227,6 +233,10 @@ document.addEventListener('change', e => {
     // a debt balance is read off a statement, so stamp the day it was true
     const db = el.dataset.set.match(/^money\.debts\.(\d+)\.balance$/);
     if (db && S.money.debts[+db[1]]) S.money.debts[+db[1]].balanceOn = C.today();
+    // a new rate answers a fixed term that has run out; the end date is then typed afresh
+    const dr = el.dataset.set.match(/^money\.debts\.(\d+)\.apr$/);
+    const dd = dr && S.money.debts[+dr[1]];
+    if (dd && dd.rateEnds && dd.rateEnds <= C.mkey(C.today())) dd.rateEnds = null;
     commit(fieldLabel(el));
   }
 });

@@ -764,3 +764,44 @@ test('a bill can ask to have its price checked once a year', () => {
   assert.deepEqual(C.moneyCalc(bills({ ...ct, review: null }), '2027-04-01', OPT).reviews, [],
     'a bill that never changes is never asked about');
 });
+
+test('a mortgage drops by far less than the repayment', () => {
+  const mtg = { id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08,
+    repayment: 958.41, apr: 0.041, balanceOn: '2027-01-10' };
+  const n = C.debtNow(mtg, { bills: [], debts: [] }, '2027-04-10', OPT);
+  assert.equal(n.payments, 3);
+  assert.equal(n.paid, C.r2(958.41 * 3), 'three payments went out');
+  assert.equal(C.r2(n.interest), 2022.21, 'and interest went back on');
+  assert.equal(n.balance, 196719.06);
+  assert.equal(C.r2(197572.08 - n.balance), 853.02, 'so £853 came off the debt, not £2,875');
+  assert.ok(n.balance > 197572.08 - n.paid, 'never the whole repayment');
+  assert.equal(n.noRate, false);
+});
+
+test('a blank APR is flagged rather than treated as nought per cent', () => {
+  const d = { id: 'd1', name: 'Loan', type: 'Long-term', balance: 10000, repayment: 200, balanceOn: '2027-01-10' };
+  const blank = C.debtNow({ ...d, apr: null }, { bills: [], debts: [] }, '2027-04-10', OPT);
+  assert.equal(blank.interest, 0);
+  assert.equal(blank.balance, 9400, 'the whole repayment comes off');
+  assert.equal(blank.noRate, true, 'and it says so, because that flatters a real debt');
+
+  const zero = C.debtNow({ ...d, apr: 0 }, { bills: [], debts: [] }, '2027-04-10', OPT);
+  assert.equal(zero.balance, 9400, 'a genuine 0% deal behaves the same');
+  assert.equal(zero.noRate, false, 'but is not flagged, because it was typed on purpose');
+
+  const m = { bills: [], debts: [{ ...d, apr: null }], months: [] };
+  assert.equal(C.moneyCalc(m, '2027-04-10', OPT).noRateDebts.length, 1);
+  assert.equal(C.debtNow({ ...d, apr: null, balanceOn: null }, m, '2027-04-10', OPT).noRate, false,
+    'nothing is being carried, so there is nothing to flag');
+});
+
+test('a fixed rate running out is flagged the month it does', () => {
+  const mtg = { id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08,
+    repayment: 958.41, apr: 0.041, balanceOn: '2027-01-10', rateEnds: '2027-09' };
+  const due = tod => C.moneyCalc({ bills: [], debts: [mtg], months: [] }, tod, OPT).rateReviews.map(d => d.rateDue);
+  assert.deepEqual(due('2027-08-31'), [], 'quiet while the fix is still running');
+  assert.deepEqual(due('2027-09-01'), ['2027-09'], 'flagged the month it ends');
+  assert.deepEqual(due('2028-02-01'), ['2027-09'], 'and stays flagged until it is dealt with');
+  assert.deepEqual(C.moneyCalc({ bills: [], debts: [{ ...mtg, rateEnds: null }], months: [] }, '2027-09-01', OPT).rateReviews,
+    [], 'a debt with no fixed term is never asked about');
+});
