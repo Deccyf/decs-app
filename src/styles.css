@@ -360,6 +360,12 @@ canvas{display:block}
 .btnrow.end{margin:0;justify-content:flex-end}
 .semi{font-weight:600}
 .row.aside{opacity:.55}   /* shown, but not part of the figure above it */
+
+/* Twelve months, tapped on or off. Two rows of six fits a phone. */
+.months{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:6px}
+.months button{border:1px solid var(--fld-brd);background:var(--fld);color:var(--ink);border-radius:var(--r-xs);
+  padding:9px 0;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;min-height:40px}
+.months button.off{background:transparent;color:var(--muted);border-style:dashed;text-decoration:line-through}
 .warn{color:var(--warn)}
 .done{color:var(--muted);text-decoration:line-through}
 .errpre{white-space:pre-wrap;color:var(--bad);margin:12px 0 0}

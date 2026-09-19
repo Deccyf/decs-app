@@ -90,6 +90,20 @@ document.addEventListener('click', async e => {
   if (a === 'cycle') { const j = S.house[+d.i]; const order = ['To do', 'In progress', 'Done']; j.status = order[(order.indexOf(j.status) + 1) % 3]; if (j.status === 'Done' && !j.dateDone) j.dateDone = C.today(); if (j.status === 'To do') j.dateDone = null; commit(`moving ${j.job || 'a job'} to ${j.status}`); return; }
   if (a === 'addJob') { S.house.push({ id: uid(), job: '', status: 'To do', dateDone: null, notes: '' }); ui.editJobs = true; commit('adding a job'); return; }
   if (a === 'delJob') { const j = S.house[+d.i]; if (await confirmDlg('Remove this job?', esc(j.job || ''))) { drop(S.house, j); removed(j.job || 'a job'); } return; }
+  if (a === 'billChecked') {
+    const b = S.money.bills.find(x => x.id === d.id); if (!b) return;
+    b.reviewedOn = C.mkey(C.today());
+    commit(`checking ${b.name || 'that bill'}`);
+    toast(`${b.name || 'That bill'} left as it is`, UNDO);
+    return;
+  }
+  if (a === 'billSkip') {
+    const b = S.money.bills[+d.i]; if (!b) return;
+    const mo = +d.m, at = b.skip.indexOf(mo);
+    if (at >= 0) b.skip.splice(at, 1); else { b.skip.push(mo); b.skip.sort((x, y) => x - y); }
+    commit(`the months for ${b.name || 'that bill'}`);
+    return;
+  }
   if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit('adding a bill'); return; }
   if (a === 'delBill') { const b = S.money.bills[+d.i]; if (await confirmDlg('Remove this bill?', esc(b.name || ''))) { drop(S.money.bills, b); removed(b.name || 'a bill'); } return; }
   if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(`adding ${C.fmtM(k)}`); toast('Added ' + C.fmtM(k)); } return; }
@@ -210,6 +224,9 @@ document.addEventListener('change', e => {
     setPath(S, el.dataset.set, parseInput(el));
     if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); logBalance(0); }   // stamp it so a stale figure is obvious
     if (el.dataset.set === 'money.balance' || el.dataset.set === 'money.amex') S.money.amexUndo = null;
+    // a debt balance is read off a statement, so stamp the day it was true
+    const db = el.dataset.set.match(/^money\.debts\.(\d+)\.balance$/);
+    if (db && S.money.debts[+db[1]]) S.money.debts[+db[1]].balanceOn = C.today();
     commit(fieldLabel(el));
   }
 });
@@ -253,6 +270,7 @@ async function billAmountChanged(i, next) {
   const prev = C.num(b.amount), thisMonth = C.mkey(C.today());
   const worthKeeping = prev && next !== null && C.r2(next) !== C.r2(prev)
     && b.started && b.started < thisMonth && !b.ended && !b.link;
+  if (b.review) b.reviewedOn = thisMonth;                  // a new price answers this year's check
   if (!worthKeeping) { b.amount = next; commit(`changing ${b.name || 'a bill'}`); return; }
   const up = next > prev, diff = Math.abs(C.r2(next - prev));
   const keep = await dialog({

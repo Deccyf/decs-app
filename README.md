@@ -31,6 +31,15 @@ arrow in the header (or Ctrl+Z; Ctrl+Shift+Z to redo) puts the previous
 snapshot back whole. The history is in memory only and is never written to the
 device, so a PIN-locked app leaves no unencrypted trail.
 
+A bill can have months off (`skip`, month numbers) for council tax over ten
+instalments and the like, and a month it changes price each year (`review`),
+which nudges once a year until the new figure is typed or the old one confirmed.
+
+A debt balance is typed off a statement and carried forward by `C.debtNow`: the
+repayments due since come off it and interest goes back on at a twelfth of the
+APR, with `balanceOn` recording the day the typed figure was true. The typed
+figure is never rewritten.
+
 Savings are one pot and a list. `money.savings` holds a single balance plus the
 things being saved for, and `C.savingsCalc` measures every one of them against
 the whole balance, because it is one pile of money rather than several. Buying

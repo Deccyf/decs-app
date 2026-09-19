@@ -164,8 +164,16 @@ function normalize() {
   if (m.balance !== null && m.balance !== undefined && m.balance !== '' && !m.balanceOn) m.balanceOn = C.today();
   if (m.dueShift !== 'exact' && m.dueShift !== 'prev' && m.dueShift !== 'next') m.dueShift = 'next';
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
-  m.bills.forEach(b => { if (!b.id) b.id = uid(); if (b.dueDay === undefined) b.dueDay = null; });
-  m.debts.forEach(d => { if (!d.id) d.id = uid(); });
+  m.bills.forEach(b => {
+    if (!b.id) b.id = uid();
+    if (b.dueDay === undefined) b.dueDay = null;
+    const rv = Math.round(C.num(b.review));
+    b.review = rv >= 1 && rv <= 12 ? rv : null;
+    if (!/^\d{4}-\d{2}$/.test(b.reviewedOn || '')) b.reviewedOn = null;
+    if (!Array.isArray(b.skip)) b.skip = [];
+    b.skip = [...new Set(b.skip.map(x => Math.round(C.num(x))).filter(x => x >= 1 && x <= 12))].sort((x, y) => x - y);
+  });
+  m.debts.forEach(d => { if (!d.id) d.id = uid(); if (d.balanceOn === undefined) d.balanceOn = null; });
   m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
      Unsorted rows make "latest month" and the chart wrong; duplicates double
@@ -416,4 +424,13 @@ const segment = (act, val, opts) => `<div class="seg" role="group">${opts.map(o 
 const toggle = (path, on, label, note) => `<label class="switch"><span class="sl"><b>${esc(label)}</b>${note ? `<small>${esc(note)}</small>` : ''}</span>
   <input type="checkbox" data-set="${esc(path)}"${on ? ' checked' : ''}><span class="track"></span></label>`;
 const flowOpt = () => ({ shift: S.money.dueShift, bankHols: !!S.money.bankHols });
+/* Twelve taps for the months a bill is not paid. Council tax over ten
+   instalments, a gym frozen for the winter — the pattern varies, so all twelve
+   are offered rather than a "number of instalments" box. */
+const selPairs = (path, val, opts) => `<select data-set="${esc(path)}">${opts.map(o =>
+  `<option value="${esc(o.v)}"${String(o.v) === String(val ?? '') ? ' selected' : ''}>${esc(o.l)}</option>`).join('')}</select>`;
+const monthPicker = (i, skip) => `<div class="months" role="group" aria-label="Months this bill is not paid">${
+  C.MON.map((name, k) => { const mo = k + 1, off = skip.includes(mo);
+    return `<button type="button" data-act="billSkip" data-i="${i}" data-m="${mo}" class="${off ? 'off' : ''}" aria-pressed="${off ? 'false' : 'true'}">${name}</button>`;
+  }).join('')}</div>`;
 

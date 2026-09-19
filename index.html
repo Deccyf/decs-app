@@ -374,6 +374,12 @@ canvas{display:block}
 .btnrow.end{margin:0;justify-content:flex-end}
 .semi{font-weight:600}
 .row.aside{opacity:.55}   /* shown, but not part of the figure above it */
+
+/* Twelve months, tapped on or off. Two rows of six fits a phone. */
+.months{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:6px}
+.months button{border:1px solid var(--fld-brd);background:var(--fld);color:var(--ink);border-radius:var(--r-xs);
+  padding:9px 0;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;min-height:40px}
+.months button.off{background:transparent;color:var(--muted);border-style:dashed;text-decoration:line-through}
 .warn{color:var(--warn)}
 .done{color:var(--muted);text-decoration:line-through}
 .errpre{white-space:pre-wrap;color:var(--bad);margin:12px 0 0}
@@ -793,17 +799,33 @@ const C = (() => {
     if (b.link) return debts.filter(d => d.type === b.link).reduce((a, d) => a + num(d.repayment), 0);
     return num(b.amount);
   }
-  function moneyCalc(m, tod) {
+  function moneyCalc(m, tod, opt) {
     tod = tod || today();
+    opt = opt || { shift: 'exact', bankHols: false };
     const debts = m.debts || [];
-    const bills = (m.bills || []).map(b => ({ ...b, amt: billAmount(b, debts) }));
+    /* Some bills change price on a date you already know — council tax every
+       April, insurance on its renewal month. Nothing can look the new figure up,
+       but the app can stop it going stale quietly by asking once a year. */
+    const thisKey = mkey(tod);
+    const bills = (m.bills || []).map(b => {
+      const amt = billAmount(b, debts), months = 12 - (b.skip || []).length;
+      const mo = Math.round(num(b.review));
+      const due = (mo >= 1 && mo <= 12) && `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` <= thisKey
+        ? `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` : null;
+      // a bill paid ten months of the year costs less over a year than twelve times its price
+      return { ...b, amt, paidMonths: months, yearly: r2(amt * months),
+        dueReview: due && (!b.reviewedOn || b.reviewedOn < due) ? due : null };
+    });
     const active = bills.filter(b => !b.ended);
     const activeTotal = active.reduce((a, b) => a + b.amt, 0);
+    const yearTotal = r2(active.reduce((a, b) => a + b.yearly, 0));
+    const anySkips = active.some(b => b.paidMonths < 12);
     const dated = active.filter(b => num(b.dueDay) >= 1);
     const byCat = {}; active.forEach(b => { byCat[b.category || 'Other'] = (byCat[b.category || 'Other'] || 0) + b.amt; });
     const months = (m.months || []).map(x => {
       const has = x.earnings !== null && x.earnings !== undefined && x.earnings !== '';
-      const out = has ? bills.filter(b => (b.started || '0000-00') <= x.month && (!b.ended || b.ended >= x.month)).reduce((a, b) => a + b.amt, 0) : null;
+      const out = has ? bills.filter(b => (b.started || '0000-00') <= x.month && (!b.ended || b.ended >= x.month)
+        && !(b.skip || []).includes(+x.month.slice(5, 7))).reduce((a, b) => a + b.amt, 0) : null;
       const disp = has ? num(x.earnings) - out : null;
       const pot = has ? Math.max(disp - num(m.buffer), 0) : null;
       return { ...x, has, outgoings: out, disposable: disp, potential: pot, savedN: num(x.saved) };
@@ -818,12 +840,16 @@ const C = (() => {
     const ly = latest ? latest.month.slice(0, 4) : tod.slice(0, 4);
     const yearRow = byYear[ly] || null;
     const thisMonthKey = mkey(tod);
-    const debtCalc = debts.map(d => ({ ...d, payoff: debtPayoff(d, tod) }));
-    const debtTotal = debts.reduce((a, d) => a + num(d.balance), 0);
+    const debtCalc = debts.map(d => {
+      const now = debtNow(d, m, tod, opt);
+      return { ...d, balance: now.balance, now, payoff: debtPayoff({ ...d, balance: now.balance }, tod) };
+    });
+    const debtTotal = debtCalc.reduce((a, d) => a + num(d.balance), 0);
     const repayTotal = debts.reduce((a, d) => a + num(d.repayment), 0);
     const st = debtCalc.filter(d => d.type === 'Short-term');
     const stClear = st.map(d => d.payoff).filter(x => x && x.date).map(x => x.date).sort().pop() || null;
-    return { bills, active, activeTotal, dated, undated: active.length - dated.length, byCat, months,
+    return { bills, active, activeTotal, yearTotal, anySkips, reviews: active.filter(b => b.dueReview),
+      dated, undated: active.length - dated.length, byCat, months,
       byYear: Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year)), latest, yearRow, thisMonthKey,
       debts: debtCalc, debtTotal, repayTotal, stClear, last12: last12(months, latest) };
   }
@@ -832,6 +858,39 @@ const C = (() => {
     const idx = months.findIndex(x => x.month === latest.month);
     const out = [];
     for (let i = Math.max(0, idx - 11); i <= idx; i++) out.push(months[i]);
+    return out;
+  }
+  /* A debt balance typed off a statement, brought up to date.
+     The repayment leaves every month whether or not the app is opened, so a
+     balance typed weeks ago is already wrong. This works it forward the way the
+     bank balance is worked forward: the typed figure stands, every payment due
+     since comes off it, and interest goes on at a twelfth of the APR. Retype it
+     when the next statement lands and the projection starts again from there. */
+  function debtNow(d, m, tod, opt) {
+    tod = tod || today();
+    const typed = r2(num(d.balance)), on = d.balanceOn || null, pay = num(d.repayment);
+    const out = { typed, on, balance: typed, paid: 0, interest: 0, payments: 0, carried: false, cleared: false };
+    if (!typed || !on || on >= tod || !pay) return out;
+    // a bill funding this kind of debt says which day the money really leaves
+    const bill = (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
+      && !b.ended && num(b.dueDay) >= 1);
+    const dates = bill
+      ? billDates(bill, addDays(on, 1), tod, opt || { shift: 'exact', bankHols: false })
+      : (() => { const a = []; for (let i = 1; i <= 240; i++) { const x = addMonths(on, i); if (x > tod) break; a.push({ date: x }); } return a; })();
+    const r = num(d.apr) / 12;
+    let bal = typed;
+    dates.forEach(() => {
+      if (bal <= 0) return;
+      const int = r2(bal * r);
+      const took = Math.min(pay, r2(bal + int));
+      bal = r2(bal + int - took);
+      out.interest = r2(out.interest + int);
+      out.paid = r2(out.paid + took);
+      out.payments++;
+    });
+    out.balance = Math.max(0, bal);
+    out.carried = out.payments > 0;
+    out.cleared = out.balance === 0 && out.carried;
     return out;
   }
   function debtPayoff(d, tod) {
@@ -855,7 +914,9 @@ const C = (() => {
     let mk = mkey(addMonths(from, -1));
     const end = mkey(addMonths(to, 1));
     for (let guard = 0; mk <= end && guard < 80; guard++) {
-      const inForce = (b.started || '0000-00') <= mk && (!b.ended || b.ended >= mk);
+      // council tax over ten instalments, a gym frozen for the winter: months off
+      const inForce = (b.started || '0000-00') <= mk && (!b.ended || b.ended >= mk)
+        && !(b.skip || []).includes(+mk.slice(5, 7));
       if (inForce) {
         const y = +mk.slice(0, 4), mo = +mk.slice(5, 7) - 1;
         const nominal = d2i(new Date(Date.UTC(y, mo, Math.min(day, dim(y, mo)))));
@@ -1109,7 +1170,7 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 
 /* ===== app: state, views, events ===== */
@@ -1278,8 +1339,16 @@ function normalize() {
   if (m.balance !== null && m.balance !== undefined && m.balance !== '' && !m.balanceOn) m.balanceOn = C.today();
   if (m.dueShift !== 'exact' && m.dueShift !== 'prev' && m.dueShift !== 'next') m.dueShift = 'next';
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
-  m.bills.forEach(b => { if (!b.id) b.id = uid(); if (b.dueDay === undefined) b.dueDay = null; });
-  m.debts.forEach(d => { if (!d.id) d.id = uid(); });
+  m.bills.forEach(b => {
+    if (!b.id) b.id = uid();
+    if (b.dueDay === undefined) b.dueDay = null;
+    const rv = Math.round(C.num(b.review));
+    b.review = rv >= 1 && rv <= 12 ? rv : null;
+    if (!/^\d{4}-\d{2}$/.test(b.reviewedOn || '')) b.reviewedOn = null;
+    if (!Array.isArray(b.skip)) b.skip = [];
+    b.skip = [...new Set(b.skip.map(x => Math.round(C.num(x))).filter(x => x >= 1 && x <= 12))].sort((x, y) => x - y);
+  });
+  m.debts.forEach(d => { if (!d.id) d.id = uid(); if (d.balanceOn === undefined) d.balanceOn = null; });
   m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
      Unsorted rows make "latest month" and the chart wrong; duplicates double
@@ -1530,6 +1599,15 @@ const segment = (act, val, opts) => `<div class="seg" role="group">${opts.map(o 
 const toggle = (path, on, label, note) => `<label class="switch"><span class="sl"><b>${esc(label)}</b>${note ? `<small>${esc(note)}</small>` : ''}</span>
   <input type="checkbox" data-set="${esc(path)}"${on ? ' checked' : ''}><span class="track"></span></label>`;
 const flowOpt = () => ({ shift: S.money.dueShift, bankHols: !!S.money.bankHols });
+/* Twelve taps for the months a bill is not paid. Council tax over ten
+   instalments, a gym frozen for the winter — the pattern varies, so all twelve
+   are offered rather than a "number of instalments" box. */
+const selPairs = (path, val, opts) => `<select data-set="${esc(path)}">${opts.map(o =>
+  `<option value="${esc(o.v)}"${String(o.v) === String(val ?? '') ? ' selected' : ''}>${esc(o.l)}</option>`).join('')}</select>`;
+const monthPicker = (i, skip) => `<div class="months" role="group" aria-label="Months this bill is not paid">${
+  C.MON.map((name, k) => { const mo = k + 1, off = skip.includes(mo);
+    return `<button type="button" data-act="billSkip" data-i="${i}" data-m="${mo}" class="${off ? 'off' : ''}" aria-pressed="${off ? 'false' : 'true'}">${name}</button>`;
+  }).join('')}</div>`;
 
 /* ---------- sparkline: projected balance between now and pay day ---------- */
 function sparkline(series, overdraft) {
@@ -1598,11 +1676,11 @@ const moneySwitcher = sec => `<div class="subnav">${segment('moneyTab', sec, MON
 /* ---------- views ---------- */
 const VIEWS = {
   home() {
-    const m = C.moneyCalc(S.money), p = C.payCalc(S.pay), g = C.gamesStats(S.games), cols = C.collections(S);
+    const m = C.moneyCalc(S.money, null, flowOpt()), p = C.payCalc(S.pay), g = C.gamesStats(S.games), cols = C.collections(S);
     const nx = p.rows[p.nextIdx] || null, tod = C.today();
     const fl = C.runway(S.money, p, flowOpt());
     const per = C.periodFlows(S.money, p, flowOpt(), 1)[0] || null;
-    const pots = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
+    const pots = C.savingsCalc(S.money.savings, m.debts, null, S.money.netLongTerm);
     const yr = m.yearRow;
     let h = '';
     if (SEED.generic && !S.money.months.length && !S.money.bills.length && !S.games.length && !S.classic.length)
@@ -1627,6 +1705,7 @@ const VIEWS = {
     const backupAge = S.backupOn ? C.daysBetween(S.backupOn, tod) : null;
     if (anyData && backupAge === null) attn.push(['', `<b>No backup yet.</b> Lose this phone and these figures go with it.`, 'settings']);
     else if (backupAge !== null && backupAge >= 30) attn.push(['', `<b>Last backup was ${backupAge} days ago.</b> Worth downloading a fresh one.`, 'settings']);
+    m.reviews.forEach(b => attn.push(['', `<b>${esc(b.name || 'A bill')} changes in ${esc(C.MON[b.review - 1])}.</b> Check the new amount — it is still down as ${C.gbp(b.amt)}.`, 'bills']));
     if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest]) => {
       const gear = dest === 'settings';
       return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${gear ? 'settings' : 'money'}"${gear ? '' : ` data-sec="${esc(dest)}"`}><span>${text}</span><i aria-hidden="true">›</i></button>`;
@@ -1696,7 +1775,7 @@ const VIEWS = {
   },
 
   money() {
-    const m = C.moneyCalc(S.money), p = C.payCalc(S.pay), opt = flowOpt();
+    const opt = flowOpt(), m = C.moneyCalc(S.money, null, opt), p = C.payCalc(S.pay);
     const fl = C.runway(S.money, p, opt);
     const flows = C.periodFlows(S.money, p, opt, ui.flowPeriods);
     const cur = m.thisMonthKey;
@@ -1803,13 +1882,20 @@ const VIEWS = {
     }
     if (sec === 'bills') {
     /* --- 4. bills --- */
-    h += `<div class="card"><h2>Bills</h2><div class="row"><div class="l"><b>Active bills total</b><small>${m.active.length} bills · ${m.dated.length} with a payment date</small></div><div class="strong num">${C.gbp(m.activeTotal)}</div></div>
+    h += `<div class="card"><h2>Bills</h2><div class="row"><div class="l"><b>Active bills total</b><small>${m.active.length} bills · ${m.dated.length} with a payment date${m.anySkips ? ' · ' + C.gbp(m.yearTotal, 0) + ' a year' : ''}</small></div><div class="strong num">${C.gbp(m.activeTotal)}</div></div>
+      ${m.reviews.map(b => `<div class="banner mt12"><b>${esc(b.name || 'A bill')} changes in ${esc(C.MON[b.review - 1])}.</b>
+        Check what it has gone to and type the new amount — the old price is kept, so the history still adds up.
+        <div class="btnrow"><button class="btn ghost sm" data-act="billChecked" data-id="${esc(b.id)}">Still ${C.gbp(b.amt)}</button></div></div>`).join('')}
       ${ui.editBills ? m.bills.map((b, i) => `<div class="erow">${field('Bill', inp(`money.bills.${i}.name`, b.name, 'text'))}${field('Category', sel(`money.bills.${i}.category`, b.category, CATS))}
           ${field(b.link ? 'Amount (linked to ' + b.link.toLowerCase() + ' debt repayments)' : 'Amount', b.link ? `<input type="text" value="${C.gbp(b.amt)}" disabled>` : inp(`money.bills.${i}.amount`, b.amount))}
           ${field('Day of month it leaves', inp(`money.bills.${i}.dueDay`, b.dueDay, 'number', 'min="1" max="31" step="1" placeholder="1–31"'))}
           ${field('Started', inp(`money.bills.${i}.started`, b.started, 'month'))}${field('Ended (blank = still paying)', inp(`money.bills.${i}.ended`, b.ended, 'month'))}
+          ${field('Price changes in', selPairs(`money.bills.${i}.review`, b.review,
+            [{ v: '', l: "Doesn't change" }].concat(C.MON.map((n, k) => ({ v: k + 1, l: n })))))}
+          ${b.reviewedOn ? field('Last checked', `<input type="text" value="${esc(C.fmtM(b.reviewedOn))}" disabled>`) : ''}
+          <div class="full"><label>Months it is paid${b.paidMonths < 12 ? ` · ${b.paidMonths} of 12` : ''}</label>${monthPicker(i, b.skip)}</div>
           <div class="full"><button class="btn danger sm" data-act="delBill" data-i="${i}">Remove ${esc(b.name || 'bill')}</button></div></div>`).join('') || '<div class="empty">No bills yet.</div>'
-        : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
+        : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}${b.paidMonths < 12 ? ' · ' + b.paidMonths + ' months a year' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}${b.paidMonths < 12 ? `<div class="muted small">${C.gbp(b.yearly, 0)} a year</div>` : ''}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editBills">${ui.editBills ? 'Done' : 'Edit bills'}</button>${ui.editBills ? '<button class="btn sm" data-act="addBill">Add bill</button>' : ''}</div>
       ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
         return cats.length > 1 ? `<div class="sep"></div><div class="eyebrow">Where it goes each month</div>
@@ -1837,7 +1923,7 @@ const VIEWS = {
     }
     if (sec === 'saving') {
     /* --- 4c. the savings pot, and the list it has to stretch across --- */
-    const sv = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
+    const sv = C.savingsCalc(S.money.savings, m.debts, null, S.money.netLongTerm);
     h += `<div class="card"><h2>Savings pot${sv.monthly ? `<span class="hint">${C.gbp(sv.monthly)} a month going in</span>` : ''}</h2>
       <div class="flowhero"><div><div class="amt">${C.gbp(sv.balance)}</div>
         <div class="muted small">put away${sv.goals.length ? ` · the list comes to ${C.gbp(sv.wanted, 0)}` : ''}</div></div></div>
@@ -1872,11 +1958,14 @@ const VIEWS = {
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>
       ${ui.editDebts ? m.debts.map((d, i) => `<div class="erow">${field('Debt', inp(`money.debts.${i}.name`, d.name, 'text'))}${field('Type', sel(`money.debts.${i}.type`, d.type, ['Short-term', 'Long-term']))}
-          ${field('Balance', inp(`money.debts.${i}.balance`, d.balance))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment))}
-          ${field('APR % (optional)', pctInp(`money.debts.${i}.apr`, d.apr))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
-        : m.debts.map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b><small>${esc(d.type)} · ${C.gbp(d.repayment)}/month${d.payoff ? d.payoff.never ? ' · repayment below interest' : ' · clear by ' + esc(C.fmtM(d.payoff.date)) + (d.payoff.naive ? ' (no interest)' : '') : ''}</small></div><div class="num">${C.gbp(d.balance)}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
+          ${field(d.now.on ? `Balance (${C.fmtDM(d.now.on)})` : 'Balance', inp(`money.debts.${i}.balance`, d.now.typed || null))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment))}
+          ${field('APR % (optional)', pctInp(`money.debts.${i}.apr`, d.apr))}${field('Balance true on', inp(`money.debts.${i}.balanceOn`, d.now.on, 'date'))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
+        : m.debts.map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b><small>${esc(d.type)} · ${C.gbp(d.repayment)}/month${d.payoff ? d.payoff.never ? ' · repayment below interest' : ' · clear by ' + esc(C.fmtM(d.payoff.date)) + (d.payoff.naive ? ' (no interest)' : '') : ''}${d.now.cleared ? ' · <b class="pos">cleared</b>' : ''}</small></div>
+          <div class="num tr"><b>${C.gbp(d.balance)}</b>${d.now.carried ? `<div class="muted small">${C.gbp(d.now.typed, 0)} on ${esc(C.fmtDM(d.now.on))} · ${d.now.payments} paid</div>` : ''}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editDebts">${ui.editDebts ? 'Done' : 'Edit debts'}</button>${ui.editDebts ? '<button class="btn sm" data-act="addDebt">Add debt</button>' : ''}</div>
-      <div class="note">Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
+      <div class="note">Type a balance straight off the statement and the app carries it forward on its own: every repayment due since comes off it, and interest goes back on at a twelfth of the APR. The date it was true is kept underneath, so retype it when the next statement lands and it starts again from there.
+      Repayment dates come from the bill that funds them where there is one, otherwise the same day each month.
+      Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
     }
     return { title: 'Money', chart: sec === 'history' ? m.last12 : null, sub: fl.hasBal ? C.gbp(fl.safe, 0) + ' free · ' + fl.days + ' days to pay day' : (m.latest ? 'latest: ' + C.fmtM(m.latest.month) : ''), html: h };
   },
@@ -2275,6 +2364,20 @@ document.addEventListener('click', async e => {
   if (a === 'cycle') { const j = S.house[+d.i]; const order = ['To do', 'In progress', 'Done']; j.status = order[(order.indexOf(j.status) + 1) % 3]; if (j.status === 'Done' && !j.dateDone) j.dateDone = C.today(); if (j.status === 'To do') j.dateDone = null; commit(`moving ${j.job || 'a job'} to ${j.status}`); return; }
   if (a === 'addJob') { S.house.push({ id: uid(), job: '', status: 'To do', dateDone: null, notes: '' }); ui.editJobs = true; commit('adding a job'); return; }
   if (a === 'delJob') { const j = S.house[+d.i]; if (await confirmDlg('Remove this job?', esc(j.job || ''))) { drop(S.house, j); removed(j.job || 'a job'); } return; }
+  if (a === 'billChecked') {
+    const b = S.money.bills.find(x => x.id === d.id); if (!b) return;
+    b.reviewedOn = C.mkey(C.today());
+    commit(`checking ${b.name || 'that bill'}`);
+    toast(`${b.name || 'That bill'} left as it is`, UNDO);
+    return;
+  }
+  if (a === 'billSkip') {
+    const b = S.money.bills[+d.i]; if (!b) return;
+    const mo = +d.m, at = b.skip.indexOf(mo);
+    if (at >= 0) b.skip.splice(at, 1); else { b.skip.push(mo); b.skip.sort((x, y) => x - y); }
+    commit(`the months for ${b.name || 'that bill'}`);
+    return;
+  }
   if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit('adding a bill'); return; }
   if (a === 'delBill') { const b = S.money.bills[+d.i]; if (await confirmDlg('Remove this bill?', esc(b.name || ''))) { drop(S.money.bills, b); removed(b.name || 'a bill'); } return; }
   if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(`adding ${C.fmtM(k)}`); toast('Added ' + C.fmtM(k)); } return; }
@@ -2395,6 +2498,9 @@ document.addEventListener('change', e => {
     setPath(S, el.dataset.set, parseInput(el));
     if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); logBalance(0); }   // stamp it so a stale figure is obvious
     if (el.dataset.set === 'money.balance' || el.dataset.set === 'money.amex') S.money.amexUndo = null;
+    // a debt balance is read off a statement, so stamp the day it was true
+    const db = el.dataset.set.match(/^money\.debts\.(\d+)\.balance$/);
+    if (db && S.money.debts[+db[1]]) S.money.debts[+db[1]].balanceOn = C.today();
     commit(fieldLabel(el));
   }
 });
@@ -2438,6 +2544,7 @@ async function billAmountChanged(i, next) {
   const prev = C.num(b.amount), thisMonth = C.mkey(C.today());
   const worthKeeping = prev && next !== null && C.r2(next) !== C.r2(prev)
     && b.started && b.started < thisMonth && !b.ended && !b.link;
+  if (b.review) b.reviewedOn = thisMonth;                  // a new price answers this year's check
   if (!worthKeeping) { b.amount = next; commit(`changing ${b.name || 'a bill'}`); return; }
   const up = next > prev, diff = Math.abs(C.r2(next - prev));
   const keep = await dialog({

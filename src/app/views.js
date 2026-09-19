@@ -65,11 +65,11 @@ const moneySwitcher = sec => `<div class="subnav">${segment('moneyTab', sec, MON
 /* ---------- views ---------- */
 const VIEWS = {
   home() {
-    const m = C.moneyCalc(S.money), p = C.payCalc(S.pay), g = C.gamesStats(S.games), cols = C.collections(S);
+    const m = C.moneyCalc(S.money, null, flowOpt()), p = C.payCalc(S.pay), g = C.gamesStats(S.games), cols = C.collections(S);
     const nx = p.rows[p.nextIdx] || null, tod = C.today();
     const fl = C.runway(S.money, p, flowOpt());
     const per = C.periodFlows(S.money, p, flowOpt(), 1)[0] || null;
-    const pots = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
+    const pots = C.savingsCalc(S.money.savings, m.debts, null, S.money.netLongTerm);
     const yr = m.yearRow;
     let h = '';
     if (SEED.generic && !S.money.months.length && !S.money.bills.length && !S.games.length && !S.classic.length)
@@ -94,6 +94,7 @@ const VIEWS = {
     const backupAge = S.backupOn ? C.daysBetween(S.backupOn, tod) : null;
     if (anyData && backupAge === null) attn.push(['', `<b>No backup yet.</b> Lose this phone and these figures go with it.`, 'settings']);
     else if (backupAge !== null && backupAge >= 30) attn.push(['', `<b>Last backup was ${backupAge} days ago.</b> Worth downloading a fresh one.`, 'settings']);
+    m.reviews.forEach(b => attn.push(['', `<b>${esc(b.name || 'A bill')} changes in ${esc(C.MON[b.review - 1])}.</b> Check the new amount — it is still down as ${C.gbp(b.amt)}.`, 'bills']));
     if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest]) => {
       const gear = dest === 'settings';
       return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${gear ? 'settings' : 'money'}"${gear ? '' : ` data-sec="${esc(dest)}"`}><span>${text}</span><i aria-hidden="true">›</i></button>`;
@@ -163,7 +164,7 @@ const VIEWS = {
   },
 
   money() {
-    const m = C.moneyCalc(S.money), p = C.payCalc(S.pay), opt = flowOpt();
+    const opt = flowOpt(), m = C.moneyCalc(S.money, null, opt), p = C.payCalc(S.pay);
     const fl = C.runway(S.money, p, opt);
     const flows = C.periodFlows(S.money, p, opt, ui.flowPeriods);
     const cur = m.thisMonthKey;
@@ -270,13 +271,20 @@ const VIEWS = {
     }
     if (sec === 'bills') {
     /* --- 4. bills --- */
-    h += `<div class="card"><h2>Bills</h2><div class="row"><div class="l"><b>Active bills total</b><small>${m.active.length} bills · ${m.dated.length} with a payment date</small></div><div class="strong num">${C.gbp(m.activeTotal)}</div></div>
+    h += `<div class="card"><h2>Bills</h2><div class="row"><div class="l"><b>Active bills total</b><small>${m.active.length} bills · ${m.dated.length} with a payment date${m.anySkips ? ' · ' + C.gbp(m.yearTotal, 0) + ' a year' : ''}</small></div><div class="strong num">${C.gbp(m.activeTotal)}</div></div>
+      ${m.reviews.map(b => `<div class="banner mt12"><b>${esc(b.name || 'A bill')} changes in ${esc(C.MON[b.review - 1])}.</b>
+        Check what it has gone to and type the new amount — the old price is kept, so the history still adds up.
+        <div class="btnrow"><button class="btn ghost sm" data-act="billChecked" data-id="${esc(b.id)}">Still ${C.gbp(b.amt)}</button></div></div>`).join('')}
       ${ui.editBills ? m.bills.map((b, i) => `<div class="erow">${field('Bill', inp(`money.bills.${i}.name`, b.name, 'text'))}${field('Category', sel(`money.bills.${i}.category`, b.category, CATS))}
           ${field(b.link ? 'Amount (linked to ' + b.link.toLowerCase() + ' debt repayments)' : 'Amount', b.link ? `<input type="text" value="${C.gbp(b.amt)}" disabled>` : inp(`money.bills.${i}.amount`, b.amount))}
           ${field('Day of month it leaves', inp(`money.bills.${i}.dueDay`, b.dueDay, 'number', 'min="1" max="31" step="1" placeholder="1–31"'))}
           ${field('Started', inp(`money.bills.${i}.started`, b.started, 'month'))}${field('Ended (blank = still paying)', inp(`money.bills.${i}.ended`, b.ended, 'month'))}
+          ${field('Price changes in', selPairs(`money.bills.${i}.review`, b.review,
+            [{ v: '', l: "Doesn't change" }].concat(C.MON.map((n, k) => ({ v: k + 1, l: n })))))}
+          ${b.reviewedOn ? field('Last checked', `<input type="text" value="${esc(C.fmtM(b.reviewedOn))}" disabled>`) : ''}
+          <div class="full"><label>Months it is paid${b.paidMonths < 12 ? ` · ${b.paidMonths} of 12` : ''}</label>${monthPicker(i, b.skip)}</div>
           <div class="full"><button class="btn danger sm" data-act="delBill" data-i="${i}">Remove ${esc(b.name || 'bill')}</button></div></div>`).join('') || '<div class="empty">No bills yet.</div>'
-        : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
+        : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}${b.paidMonths < 12 ? ' · ' + b.paidMonths + ' months a year' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}${b.paidMonths < 12 ? `<div class="muted small">${C.gbp(b.yearly, 0)} a year</div>` : ''}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editBills">${ui.editBills ? 'Done' : 'Edit bills'}</button>${ui.editBills ? '<button class="btn sm" data-act="addBill">Add bill</button>' : ''}</div>
       ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
         return cats.length > 1 ? `<div class="sep"></div><div class="eyebrow">Where it goes each month</div>
@@ -304,7 +312,7 @@ const VIEWS = {
     }
     if (sec === 'saving') {
     /* --- 4c. the savings pot, and the list it has to stretch across --- */
-    const sv = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
+    const sv = C.savingsCalc(S.money.savings, m.debts, null, S.money.netLongTerm);
     h += `<div class="card"><h2>Savings pot${sv.monthly ? `<span class="hint">${C.gbp(sv.monthly)} a month going in</span>` : ''}</h2>
       <div class="flowhero"><div><div class="amt">${C.gbp(sv.balance)}</div>
         <div class="muted small">put away${sv.goals.length ? ` · the list comes to ${C.gbp(sv.wanted, 0)}` : ''}</div></div></div>
@@ -339,11 +347,14 @@ const VIEWS = {
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>
       ${ui.editDebts ? m.debts.map((d, i) => `<div class="erow">${field('Debt', inp(`money.debts.${i}.name`, d.name, 'text'))}${field('Type', sel(`money.debts.${i}.type`, d.type, ['Short-term', 'Long-term']))}
-          ${field('Balance', inp(`money.debts.${i}.balance`, d.balance))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment))}
-          ${field('APR % (optional)', pctInp(`money.debts.${i}.apr`, d.apr))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
-        : m.debts.map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b><small>${esc(d.type)} · ${C.gbp(d.repayment)}/month${d.payoff ? d.payoff.never ? ' · repayment below interest' : ' · clear by ' + esc(C.fmtM(d.payoff.date)) + (d.payoff.naive ? ' (no interest)' : '') : ''}</small></div><div class="num">${C.gbp(d.balance)}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
+          ${field(d.now.on ? `Balance (${C.fmtDM(d.now.on)})` : 'Balance', inp(`money.debts.${i}.balance`, d.now.typed || null))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment))}
+          ${field('APR % (optional)', pctInp(`money.debts.${i}.apr`, d.apr))}${field('Balance true on', inp(`money.debts.${i}.balanceOn`, d.now.on, 'date'))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
+        : m.debts.map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b><small>${esc(d.type)} · ${C.gbp(d.repayment)}/month${d.payoff ? d.payoff.never ? ' · repayment below interest' : ' · clear by ' + esc(C.fmtM(d.payoff.date)) + (d.payoff.naive ? ' (no interest)' : '') : ''}${d.now.cleared ? ' · <b class="pos">cleared</b>' : ''}</small></div>
+          <div class="num tr"><b>${C.gbp(d.balance)}</b>${d.now.carried ? `<div class="muted small">${C.gbp(d.now.typed, 0)} on ${esc(C.fmtDM(d.now.on))} · ${d.now.payments} paid</div>` : ''}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editDebts">${ui.editDebts ? 'Done' : 'Edit debts'}</button>${ui.editDebts ? '<button class="btn sm" data-act="addDebt">Add debt</button>' : ''}</div>
-      <div class="note">Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
+      <div class="note">Type a balance straight off the statement and the app carries it forward on its own: every repayment due since comes off it, and interest goes back on at a twelfth of the APR. The date it was true is kept underneath, so retype it when the next statement lands and it starts again from there.
+      Repayment dates come from the bill that funds them where there is one, otherwise the same day each month.
+      Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
     }
     return { title: 'Money', chart: sec === 'history' ? m.last12 : null, sub: fl.hasBal ? C.gbp(fl.safe, 0) + ' free · ' + fl.days + ' days to pay day' : (m.latest ? 'latest: ' + C.fmtM(m.latest.month) : ''), html: h };
   },

@@ -272,17 +272,33 @@ const C = (() => {
     if (b.link) return debts.filter(d => d.type === b.link).reduce((a, d) => a + num(d.repayment), 0);
     return num(b.amount);
   }
-  function moneyCalc(m, tod) {
+  function moneyCalc(m, tod, opt) {
     tod = tod || today();
+    opt = opt || { shift: 'exact', bankHols: false };
     const debts = m.debts || [];
-    const bills = (m.bills || []).map(b => ({ ...b, amt: billAmount(b, debts) }));
+    /* Some bills change price on a date you already know — council tax every
+       April, insurance on its renewal month. Nothing can look the new figure up,
+       but the app can stop it going stale quietly by asking once a year. */
+    const thisKey = mkey(tod);
+    const bills = (m.bills || []).map(b => {
+      const amt = billAmount(b, debts), months = 12 - (b.skip || []).length;
+      const mo = Math.round(num(b.review));
+      const due = (mo >= 1 && mo <= 12) && `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` <= thisKey
+        ? `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` : null;
+      // a bill paid ten months of the year costs less over a year than twelve times its price
+      return { ...b, amt, paidMonths: months, yearly: r2(amt * months),
+        dueReview: due && (!b.reviewedOn || b.reviewedOn < due) ? due : null };
+    });
     const active = bills.filter(b => !b.ended);
     const activeTotal = active.reduce((a, b) => a + b.amt, 0);
+    const yearTotal = r2(active.reduce((a, b) => a + b.yearly, 0));
+    const anySkips = active.some(b => b.paidMonths < 12);
     const dated = active.filter(b => num(b.dueDay) >= 1);
     const byCat = {}; active.forEach(b => { byCat[b.category || 'Other'] = (byCat[b.category || 'Other'] || 0) + b.amt; });
     const months = (m.months || []).map(x => {
       const has = x.earnings !== null && x.earnings !== undefined && x.earnings !== '';
-      const out = has ? bills.filter(b => (b.started || '0000-00') <= x.month && (!b.ended || b.ended >= x.month)).reduce((a, b) => a + b.amt, 0) : null;
+      const out = has ? bills.filter(b => (b.started || '0000-00') <= x.month && (!b.ended || b.ended >= x.month)
+        && !(b.skip || []).includes(+x.month.slice(5, 7))).reduce((a, b) => a + b.amt, 0) : null;
       const disp = has ? num(x.earnings) - out : null;
       const pot = has ? Math.max(disp - num(m.buffer), 0) : null;
       return { ...x, has, outgoings: out, disposable: disp, potential: pot, savedN: num(x.saved) };
@@ -297,12 +313,16 @@ const C = (() => {
     const ly = latest ? latest.month.slice(0, 4) : tod.slice(0, 4);
     const yearRow = byYear[ly] || null;
     const thisMonthKey = mkey(tod);
-    const debtCalc = debts.map(d => ({ ...d, payoff: debtPayoff(d, tod) }));
-    const debtTotal = debts.reduce((a, d) => a + num(d.balance), 0);
+    const debtCalc = debts.map(d => {
+      const now = debtNow(d, m, tod, opt);
+      return { ...d, balance: now.balance, now, payoff: debtPayoff({ ...d, balance: now.balance }, tod) };
+    });
+    const debtTotal = debtCalc.reduce((a, d) => a + num(d.balance), 0);
     const repayTotal = debts.reduce((a, d) => a + num(d.repayment), 0);
     const st = debtCalc.filter(d => d.type === 'Short-term');
     const stClear = st.map(d => d.payoff).filter(x => x && x.date).map(x => x.date).sort().pop() || null;
-    return { bills, active, activeTotal, dated, undated: active.length - dated.length, byCat, months,
+    return { bills, active, activeTotal, yearTotal, anySkips, reviews: active.filter(b => b.dueReview),
+      dated, undated: active.length - dated.length, byCat, months,
       byYear: Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year)), latest, yearRow, thisMonthKey,
       debts: debtCalc, debtTotal, repayTotal, stClear, last12: last12(months, latest) };
   }
@@ -311,6 +331,39 @@ const C = (() => {
     const idx = months.findIndex(x => x.month === latest.month);
     const out = [];
     for (let i = Math.max(0, idx - 11); i <= idx; i++) out.push(months[i]);
+    return out;
+  }
+  /* A debt balance typed off a statement, brought up to date.
+     The repayment leaves every month whether or not the app is opened, so a
+     balance typed weeks ago is already wrong. This works it forward the way the
+     bank balance is worked forward: the typed figure stands, every payment due
+     since comes off it, and interest goes on at a twelfth of the APR. Retype it
+     when the next statement lands and the projection starts again from there. */
+  function debtNow(d, m, tod, opt) {
+    tod = tod || today();
+    const typed = r2(num(d.balance)), on = d.balanceOn || null, pay = num(d.repayment);
+    const out = { typed, on, balance: typed, paid: 0, interest: 0, payments: 0, carried: false, cleared: false };
+    if (!typed || !on || on >= tod || !pay) return out;
+    // a bill funding this kind of debt says which day the money really leaves
+    const bill = (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
+      && !b.ended && num(b.dueDay) >= 1);
+    const dates = bill
+      ? billDates(bill, addDays(on, 1), tod, opt || { shift: 'exact', bankHols: false })
+      : (() => { const a = []; for (let i = 1; i <= 240; i++) { const x = addMonths(on, i); if (x > tod) break; a.push({ date: x }); } return a; })();
+    const r = num(d.apr) / 12;
+    let bal = typed;
+    dates.forEach(() => {
+      if (bal <= 0) return;
+      const int = r2(bal * r);
+      const took = Math.min(pay, r2(bal + int));
+      bal = r2(bal + int - took);
+      out.interest = r2(out.interest + int);
+      out.paid = r2(out.paid + took);
+      out.payments++;
+    });
+    out.balance = Math.max(0, bal);
+    out.carried = out.payments > 0;
+    out.cleared = out.balance === 0 && out.carried;
     return out;
   }
   function debtPayoff(d, tod) {
@@ -334,7 +387,9 @@ const C = (() => {
     let mk = mkey(addMonths(from, -1));
     const end = mkey(addMonths(to, 1));
     for (let guard = 0; mk <= end && guard < 80; guard++) {
-      const inForce = (b.started || '0000-00') <= mk && (!b.ended || b.ended >= mk);
+      // council tax over ten instalments, a gym frozen for the winter: months off
+      const inForce = (b.started || '0000-00') <= mk && (!b.ended || b.ended >= mk)
+        && !(b.skip || []).includes(+mk.slice(5, 7));
       if (inForce) {
         const y = +mk.slice(0, 4), mo = +mk.slice(5, 7) - 1;
         const nominal = d2i(new Date(Date.UTC(y, mo, Math.min(day, dim(y, mo)))));
@@ -588,6 +643,6 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 

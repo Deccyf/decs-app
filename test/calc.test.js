@@ -675,3 +675,92 @@ test('more money than expected reads as money in, not negative spending', () => 
   assert.equal(sp.last.spent, -200);
   assert.equal(sp.perDay, -100);
 });
+
+/* ------------------------------------------------ months off & debt carry -- */
+test('a bill can have months it is not paid', () => {
+  const ct = { id: '1', name: 'Council Tax', amount: 168, dueDay: 13, started: '2024-01', skip: [2, 3] };
+  assert.equal(C.billDates(ct, '2027-02-01', '2027-03-31', OPT).length, 0, 'February and March are free');
+  assert.equal(C.billDates(ct, '2027-04-01', '2027-04-30', OPT).length, 1, 'April is not');
+  assert.equal(C.billDates(ct, '2027-01-01', '2027-12-31', OPT).length, 10, 'ten instalments a year');
+
+  const m = bills(ct);
+  m.months = [{ month: '2027-02', earnings: 3000 }, { month: '2027-04', earnings: 3000 }];
+  const r = C.moneyCalc(m, '2027-04-20', OPT);
+  assert.equal(r.months[0].outgoings, 0, 'and a free month costs nothing');
+  assert.equal(r.months[1].outgoings, 168);
+  assert.equal(r.bills[0].paidMonths, 10);
+  assert.equal(r.bills[0].yearly, 1680, 'ten payments, not twelve');
+  assert.equal(r.yearTotal, 1680);
+  assert.equal(r.anySkips, true);
+  assert.equal(r.activeTotal, 168, 'the monthly figure is still what leaves in a month you pay');
+});
+
+test('a bill with no months off behaves exactly as before', () => {
+  const rent = { id: '1', name: 'Rent', amount: 780, dueDay: 1, started: '2024-01' };
+  assert.equal(C.billDates(rent, '2027-01-01', '2027-12-31', OPT).length, 12);
+  const r = C.moneyCalc(bills(rent), '2027-04-20', OPT);
+  assert.equal(r.bills[0].paidMonths, 12);
+  assert.equal(r.bills[0].yearly, 9360);
+  assert.equal(r.anySkips, false);
+});
+
+const debt = extra => Object.assign({ id: 'd1', name: 'Card', type: 'Short-term',
+  balance: 1850, repayment: 200, apr: 0.219, balanceOn: '2026-06-05' }, extra);
+const cardBill = { id: 'b1', name: 'Credit cards', dueDay: 5, started: '2024-01', link: 'Short-term' };
+
+test('a debt balance carries forward on its own', () => {
+  const m = { bills: [cardBill], debts: [debt()], months: [] };
+  const n = C.debtNow(debt(), m, '2026-09-19', OPT);
+  assert.equal(n.typed, 1850);
+  assert.equal(n.on, '2026-06-05');
+  assert.equal(n.payments, 3, 'July, August and September have been and gone');
+  assert.equal(n.paid, 600);
+  assert.ok(n.interest > 90 && n.interest < 95, `interest of ${n.interest} at 21.9%`);
+  assert.equal(n.balance, C.r2(1850 + n.interest - 600));
+  assert.equal(n.carried, true);
+  assert.equal(n.cleared, false);
+  assert.equal(C.moneyCalc(m, '2026-09-19', OPT).debts[0].balance, n.balance, 'and the total uses it');
+});
+
+test('without a date the balance is taken as read, as it always was', () => {
+  const m = { bills: [cardBill], debts: [], months: [] };
+  const n = C.debtNow(debt({ balanceOn: null }), m, '2026-09-19', OPT);
+  assert.deepEqual([n.balance, n.payments, n.carried], [1850, 0, false]);
+  const today = C.debtNow(debt({ balanceOn: '2026-09-19' }), m, '2026-09-19', OPT);
+  assert.equal(today.payments, 0, 'typed today, so nothing has happened since');
+});
+
+test('a debt cannot be paid past zero, and says when it is cleared', () => {
+  const m = { bills: [cardBill], debts: [], months: [] };
+  const n = C.debtNow(debt({ balance: 350, apr: null }), m, '2026-09-19', OPT);
+  assert.equal(n.balance, 0);
+  assert.equal(n.paid, 350, 'the last payment is only what was left');
+  assert.equal(n.payments, 2, 'and it stops once there is nothing to pay');
+  assert.equal(n.cleared, true);
+});
+
+test('with no bill funding it the repayment still lands monthly', () => {
+  const n = C.debtNow(debt({ apr: null }), { bills: [], debts: [] }, '2026-09-19', OPT);
+  assert.equal(n.payments, 3, 'the 5th of July, August and September');
+  assert.equal(n.balance, 1250);
+});
+
+test('a repayment smaller than the interest never gets anywhere', () => {
+  const n = C.debtNow(debt({ repayment: 10 }), { bills: [], debts: [] }, '2026-09-19', OPT);
+  assert.ok(n.balance > 1850, 'it goes up, and the app says so rather than pretending');
+});
+
+test('a bill can ask to have its price checked once a year', () => {
+  const ct = { id: '1', name: 'Council Tax', amount: 168, dueDay: 13, started: '2024-01', review: 4 };
+  const due = tod => C.moneyCalc(bills(ct), tod, OPT).reviews.map(b => [b.name, b.dueReview]);
+  assert.deepEqual(due('2027-03-31'), [], 'not before the month it changes');
+  assert.deepEqual(due('2027-04-01'), [['Council Tax', '2027-04']], 'due the moment April arrives');
+  assert.deepEqual(due('2027-09-01'), [['Council Tax', '2027-04']], 'and stays due until it is dealt with');
+
+  const done = Object.assign({}, ct, { reviewedOn: '2027-04' });
+  assert.deepEqual(C.moneyCalc(bills(done), '2027-09-01', OPT).reviews, [], 'checked, so quiet');
+  assert.deepEqual(C.moneyCalc(bills(done), '2028-04-02', OPT).reviews.map(b => b.dueReview), ['2028-04'],
+    'and asks again the next year');
+  assert.deepEqual(C.moneyCalc(bills({ ...ct, review: null }), '2027-04-01', OPT).reviews, [],
+    'a bill that never changes is never asked about');
+});
