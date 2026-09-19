@@ -16,7 +16,11 @@
     "bills": [],
     "months": [],
     "debts": [],
-    "pots": []
+    "savings": {
+      "balance": null,
+      "monthly": null,
+      "goals": []
+    }
   },
   "house": [],
   "classic": [],

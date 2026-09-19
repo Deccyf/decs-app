@@ -31,6 +31,12 @@ arrow in the header (or Ctrl+Z; Ctrl+Shift+Z to redo) puts the previous
 snapshot back whole. The history is in memory only and is never written to the
 device, so a PIN-locked app leaves no unencrypted trail.
 
+Savings are one pot and a list. `money.savings` holds a single balance plus the
+things being saved for, and `C.savingsCalc` measures every one of them against
+the whole balance, because it is one pile of money rather than several. Buying
+one takes what you paid out of the pot and moves it to the got list. The older
+shape, several pots each holding their own money, is folded into that on load.
+
 Day-to-day spending is inferred, not typed. Every balance read off the bank is
 appended to `money.balanceLog`; `C.spendLog` takes each pair of readings, works
 out what the bills and pay should have done in between, and calls the remainder

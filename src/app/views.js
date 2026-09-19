@@ -69,7 +69,7 @@ const VIEWS = {
     const nx = p.rows[p.nextIdx] || null, tod = C.today();
     const fl = C.runway(S.money, p, flowOpt());
     const per = C.periodFlows(S.money, p, flowOpt(), 1)[0] || null;
-    const pots = C.potsCalc(S.money.pots, S.money.debts, null, S.money.netLongTerm);
+    const pots = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
     const yr = m.yearRow;
     let h = '';
     if (SEED.generic && !S.money.months.length && !S.money.bills.length && !S.games.length && !S.classic.length)
@@ -90,7 +90,7 @@ const VIEWS = {
       .forEach(x => attn.push(['', `<b>${esc(x.name)}</b> ${x.last.diff > 0 ? 'went up' : 'came down'} ${C.gbp(Math.abs(x.last.diff))} a month in ${esc(C.fmtMs(x.last.month))}.`, 'bills']));
     /* The figures live on this phone and nowhere else. Say so before it matters,
        not after — and only once there is something worth losing. */
-    const anyData = S.money.bills.length || S.money.months.length || S.money.pots.length || S.games.length || S.classic.length;
+    const anyData = S.money.bills.length || S.money.months.length || pots.goals.length || pots.balance || S.games.length || S.classic.length;
     const backupAge = S.backupOn ? C.daysBetween(S.backupOn, tod) : null;
     if (anyData && backupAge === null) attn.push(['', `<b>No backup yet.</b> Lose this phone and these figures go with it.`, 'settings']);
     else if (backupAge !== null && backupAge >= 30) attn.push(['', `<b>Last backup was ${backupAge} days ago.</b> Worth downloading a fresh one.`, 'settings']);
@@ -108,8 +108,8 @@ const VIEWS = {
             per ? C.gbp(per.net, 0) + ' pay less ' + C.gbp(per.outgoings, 0) + ' bills' : 'add your pay details')}
       ${tile('navy', 'Next pay day', nx ? C.gbp(nx.net, 0) : '–', nx ? (fl.days === 0 ? 'today' : 'in ' + fl.days + ' day' + (fl.days === 1 ? '' : 's')) + ' · ' + esc(C.fmtDow(nx.payday)) : '')}
       ${tile('amber', 'Saved this year', C.gbp(yr && yr.saved, 0), yr && yr.rate != null ? C.pct(yr.rate) + ' of ' + yr.year + ' earnings' : '')}
-      ${tile(pots.net < 0 ? 'coral' : 'forest', 'Pots less ' + (pots.withLong ? 'debt' : 'short-term debt'), C.gbp(pots.net, 0),
-        pots.list.length || pots.allTotal ? C.gbp(pots.total, 0) + ' put away · ' + C.gbp(pots.debtTotal, 0) + ' owed' : 'nothing put away yet')}
+      ${tile(pots.net < 0 ? 'coral' : 'forest', 'Savings less ' + (pots.withLong ? 'debt' : 'short-term debt'), C.gbp(pots.net, 0),
+        pots.balance || pots.allTotal ? C.gbp(pots.balance, 0) + ' saved · ' + C.gbp(pots.debtTotal, 0) + ' owed' : 'nothing put away yet')}
     </div>`;
 
     /* the next seven days, with pay day in its place if it falls inside them */
@@ -129,12 +129,11 @@ const VIEWS = {
       <div class="muted small lead">${nx.ot || 0} overtime hrs · ${nx.sun || 0} Sunday hrs · period ${esc(C.fmtDM(nx.start))} – ${esc(C.fmtDM(nx.end))}</div>
       <button class="btn teal" data-act="tab" data-tab="pay">Log hours</button></div>`;
 
-    if (pots.list.length) {
-      // the pot nearest to arriving, else the first
-      const live = pots.list.filter(x => x.target && !x.done);
-      const focus = live.sort((a, b) => (a.by || '9999') < (b.by || '9999') ? -1 : 1)[0] || pots.list[0];
-      h += `<div class="card"><h2>Saving<span class="hint">${C.gbp(pots.total, 0)} put away</span></h2>${potRow(focus)}
-        <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money" data-sec="saving">All pots</button></div></div>`;
+    if (pots.balance || pots.goals.length || pots.got.length) {
+      const focus = pots.next || pots.goals[0] || null;    // the next thing you cannot afford yet
+      h += `<div class="card"><h2>Saving<span class="hint">${C.gbp(pots.balance, 0)} in the pot</span></h2>
+        ${focus ? goalRow(focus) : '<div class="muted">Nothing on the list yet.</div>'}
+        <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money" data-sec="saving">Open savings</button></div></div>`;
     }
 
     const done = S.house.filter(j => j.status === 'Done').length, tot = S.house.length;
@@ -304,23 +303,38 @@ const VIEWS = {
 
     }
     if (sec === 'saving') {
-    /* --- 4c. savings pots --- */
-    const pots = C.potsCalc(S.money.pots, S.money.debts, null, S.money.netLongTerm);
-    h += `<div class="card"><h2>Savings pots${pots.list.length ? `<span class="hint">${pots.done ? pots.done + ' hit' : pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</span>` : ''}</h2>
-      <div class="row"><div class="l"><b>Put away</b><small>${pots.totalMonthly ? C.gbp(pots.totalMonthly) + ' a month going in' : 'across ' + pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</small></div><div class="strong num">${C.gbp(pots.total)}</div></div>
-      ${pots.allTotal ? `<div class="row"><div class="l"><b>Pots less ${pots.withLong ? 'all' : 'short-term'} debt</b>
-          <small>${pots.withLong ? 'what you would have if you cleared everything today'
-            : pots.longTotal ? C.gbp(pots.longTotal, 0) + ' of long-term debt left out of this' : 'what you would have if you cleared everything today'}</small></div>
-        <div class="strong num ${pots.net < 0 ? 'neg' : 'pos'}">${C.gbp(pots.net)}</div></div>
-      ${pots.longTotal ? toggle('money.netLongTerm', S.money.netLongTerm, 'Count long-term debt too',
+    /* --- 4c. the savings pot, and the list it has to stretch across --- */
+    const sv = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
+    h += `<div class="card"><h2>Savings pot${sv.monthly ? `<span class="hint">${C.gbp(sv.monthly)} a month going in</span>` : ''}</h2>
+      <div class="flowhero"><div><div class="amt">${C.gbp(sv.balance)}</div>
+        <div class="muted small">put away${sv.goals.length ? ` · the list comes to ${C.gbp(sv.wanted, 0)}` : ''}</div></div></div>
+      <div class="btnrow"><button class="btn teal" data-act="savMove" data-d="1">Add</button><button class="btn ghost" data-act="savMove" data-d="-1">Take out</button></div>
+      <div class="grid2 mt10">${field('Going in each month', inp('money.savings.monthly', S.money.savings.monthly, 'number', 'placeholder="0"'))}</div>
+      ${sv.allTotal ? `<div class="sep"></div><div class="row"><div class="l"><b>Savings less ${sv.withLong ? 'all' : 'short-term'} debt</b>
+          <small>${sv.withLong ? 'what you would have if you cleared everything today'
+            : sv.longTotal ? C.gbp(sv.longTotal, 0) + ' of long-term debt left out of this' : 'what you would have if you cleared everything today'}</small></div>
+        <div class="strong num ${sv.net < 0 ? 'neg' : 'pos'}">${C.gbp(sv.net)}</div></div>
+      ${sv.longTotal ? toggle('money.netLongTerm', S.money.netLongTerm, 'Count long-term debt too',
         'A mortgage is not getting cleared this year, so leaving it out keeps this figure about the debt you are actually chipping away at.') : ''}` : ''}
-      ${ui.editPots ? S.money.pots.map((p, i) => `<div class="erow"><div class="full">${field('Pot', inp(`money.pots.${i}.name`, p.name, 'text'))}</div>
-          ${field('Balance', inp(`money.pots.${i}.balance`, p.balance))}${field('Saving towards (optional)', inp(`money.pots.${i}.target`, p.target, 'number', 'placeholder="none"'))}
-          ${field('Going in each month', inp(`money.pots.${i}.monthly`, p.monthly, 'number', 'placeholder="0"'))}
-          <div class="full"><button class="btn danger sm" data-act="delPot" data-i="${i}">Remove ${esc(p.name || 'pot')}</button></div></div>`).join('') || '<div class="empty">No pots yet.</div>'
-        : pots.list.map(potRow).join('') || '<div class="empty">No pots yet. Add one to track what you are putting aside.</div>'}
-      <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editPots">${ui.editPots ? 'Done' : 'Edit pots'}</button>${ui.editPots ? '<button class="btn sm" data-act="addPot">Add pot</button>' : ''}</div>
-      <div class="note">Pots sit outside the cash flow in <b>Now</b> — money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account. Put what goes in each month against a pot and it works out when you will get there.</div></div>`;
+      <div class="note"><b>Add</b> and <b>Take out</b> move money as you go — type the amount that moved, not the new total.
+      The pot sits outside the cash flow in <b>Now</b>: money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account.</div></div>`;
+
+    /* --- 4d. what the pot is for --- */
+    h += `<div class="card"><h2>Saving for${sv.goals.length ? `<span class="hint">${sv.affordable ? sv.affordable + ' you can get now' : sv.goals.length + ' thing' + (sv.goals.length === 1 ? '' : 's')}</span>` : ''}</h2>
+      ${sv.goals.length ? `<div class="results">
+        <div class="r"><span>Everything on the list</span><span class="num">${C.gbp(sv.wanted)}</span></div>
+        <div class="r"><span>In the pot</span><span class="num">${C.gbp(sv.balance)}</span></div>
+        <div class="r total"><span>${sv.toGo ? 'Still to save' : 'Spare after the lot'}</span>
+          <span class="num ${sv.toGo ? 'neg' : 'pos'}">${C.gbp(sv.toGo || sv.spare)}</span></div></div>
+        ${sv.months ? `<div class="note">At ${C.gbp(sv.monthly)} a month you would have the lot by ${esc(C.fmtM(C.mkey(sv.by)))}.</div>` : ''}
+        <div class="sep"></div>` : ''}
+      ${ui.editGoals ? S.money.savings.goals.map((g, i) => `<div class="erow"><div class="full">${field('Saving for', inp(`money.savings.goals.${i}.name`, g.name, 'text'))}</div>
+          ${field('What it costs', inp(`money.savings.goals.${i}.cost`, g.cost))}${field('Got it on', inp(`money.savings.goals.${i}.got`, g.got, 'date'))}
+          <div class="full"><button class="btn danger sm" data-act="delGoal" data-id="${esc(g.id)}">Remove ${esc(g.name || 'this')}</button></div></div>`).join('') || '<div class="empty">Nothing on the list yet.</div>'
+        : sv.goals.map(g => goalRow(g, true)).join('') || '<div class="empty">Nothing on the list yet. Add what you are saving up for and the pot gets measured against it.</div>'}
+      <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editGoals">${ui.editGoals ? 'Done' : 'Edit list'}</button><button class="btn sm" data-act="addGoal">Add something</button></div>
+      ${sv.got.length ? detailsBlock('gotlist', `Already got (${sv.got.length}) · ${C.gbp(sv.spent, 0)}`, sv.got.map(gotRow).join('')) : ''}
+      <div class="note">Every price here is measured against the whole pot, because it is one pile of money. <b>Got it</b> takes what you paid out of the pot and moves the thing down to <b>Already got</b>.</div></div>`;
 
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>

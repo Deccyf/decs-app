@@ -586,65 +586,125 @@ test('the Pay now button says what it is worth and what it does', skip, async t 
   assert.equal(await page.$$eval('[data-set="money.amexBefore"]', e => e.length), 1, 'the toggle still carries the timing');
 });
 
-test('savings pots add, show progress and remove', skip, async t => {
+test('one pot, a list of what it is for, and picking one off when you get it', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
-  data.money.pots = [
-    { id: '1', name: 'Emergency fund', balance: 1200, target: 3000, monthly: 150 },
-    { id: '2', name: 'Holiday', balance: 800, target: 800, monthly: 0 }
-  ];
+  data.money.savings = { balance: 2000, monthly: 150, goals: [
+    { id: 'g1', name: 'Omega Seamaster', cost: 5600, got: null, paid: null },
+    { id: 'g2', name: 'Holiday', cost: 800, got: null, paid: null } ] };
   const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
-  const card = async () => (await page.$$eval('#view .card', cs =>
-    cs.map(c => c.textContent.replace(/\s+/g, ' ')))).find(c => c.includes('Savings pots'));
+  const card = async name => (await page.$$eval('#view .card', cs =>
+    cs.map(c => c.textContent.replace(/\s+/g, ' ')))).find(c => c.includes(name));
+  const sav = () => stored(page).then(s => s.money.savings);
 
-  let c = await card();
-  assert.match(c, /Put away.*£2,000\.00/, 'totals the pots');
-  assert.match(c, /£150\.00 a month going in/, 'only the emergency fund has a monthly going in');
-  assert.match(c, /Pots less short-term debt.*£150\.00/, "£2,000 of pots against the sample's £1,850 card");
-  assert.match(c, /Emergency fund.*£1,800\.00 to go of £3,000.*there by Sep 2027/);
-  assert.match(c, /Holiday.*target of £800 reached/);
+  let pot = await card('Savings pot');
+  assert.match(pot, /£2,000\.00/, 'one balance, not several');
+  assert.match(pot, /the list comes to £6,400/);
+  assert.match(pot, /Savings less short-term debt.*£150\.00/, "£2,000 against the sample's £1,850 card");
 
-  await page.click('[data-act="toggle"][data-key="editPots"]');
-  await page.waitForTimeout(250);
-  await page.click('[data-act="addPot"]');
-  await page.waitForTimeout(300);
-  await page.fill('[data-set="money.pots.2.name"]', 'New bike');
-  await page.dispatchEvent('[data-set="money.pots.2.name"]', 'change');
-  await page.waitForTimeout(250);
-  await page.fill('[data-set="money.pots.2.balance"]', '60');
-  await page.dispatchEvent('[data-set="money.pots.2.balance"]', 'change');
-  await page.waitForTimeout(300);
-  let stored = await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.pots);
-  assert.equal(stored.length, 3);
-  assert.equal(stored[2].name, 'New bike');
-  assert.equal(stored[2].balance, 60);
-  assert.ok(stored[2].id, 'given an id');
+  let list = await card('Saving for');
+  assert.match(list, /Everything on the list.*£6,400\.00/);
+  assert.match(list, /Still to save.*£4,400\.00/);
+  assert.match(list, /Holiday.*you have enough for this/, 'the £800 holiday is covered by the one pot');
+  assert.match(list, /Omega Seamaster.*£3,600\.00 short/, 'and the watch is not');
+  assert.match(list, /1 you can get now/);
 
-  await page.click('[data-act="delPot"][data-i="2"]');
-  await page.waitForTimeout(300);
-  await page.click('#dlgForm button[value="ok"]');
-  await page.waitForTimeout(350);
-  stored = await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.pots);
-  assert.equal(stored.length, 2, 'removed');
-  assert.deepEqual(stored.map(p => p.name), ['Emergency fund', 'Holiday']);
+  // add something to the list
+  await page.click('[data-act="addGoal"]'); await page.waitForTimeout(300);
+  await page.fill('[data-set="money.savings.goals.2.name"]', 'New bike');
+  await page.dispatchEvent('[data-set="money.savings.goals.2.name"]', 'change'); await page.waitForTimeout(250);
+  await page.fill('[data-set="money.savings.goals.2.cost"]', '900');
+  await page.dispatchEvent('[data-set="money.savings.goals.2.cost"]', 'change'); await page.waitForTimeout(300);
+  let sv = await sav();
+  assert.equal(sv.goals.length, 3);
+  assert.deepEqual([sv.goals[2].name, sv.goals[2].cost, sv.goals[2].got], ['New bike', 900, null]);
+  await page.click('[data-act="toggle"][data-key="editGoals"]'); await page.waitForTimeout(300);
+  assert.match(await card('Saving for'), /Everything on the list.*£7,300\.00/);
+
+  // got the holiday: what you paid comes out of the one pot
+  await page.click('[data-act="goalGot"][data-id="g2"]'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('#dlgForm', e => e.textContent), /Got Holiday\?/);
+  assert.equal(await page.$eval('#dlgIn', e => e.value), '800', 'prefilled with the price');
+  await page.fill('#dlgIn', '760');                               // it came in cheaper
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(400);
+  sv = await sav();
+  assert.equal(sv.balance, 1240, '£760 out of the pot, not the listed £800');
+  assert.deepEqual([sv.goals[1].got, sv.goals[1].paid], ['2026-09-18', 760]);
+  list = await card('Saving for');
+  assert.doesNotMatch(list, /Holiday.*short/, 'it is off the list');
+  assert.match(list, /Already got \(1\).*£760/);
+  assert.match(list, /Everything on the list.*£6,500\.00/, 'and out of the total');
+
+  await page.click('#undoBtn'); await page.waitForTimeout(400);
+  sv = await sav();
+  assert.equal(sv.balance, 2000, 'undo puts the money back');
+  assert.equal(sv.goals[1].got, null, 'and the thing back on the list');
 });
 
-test('pots stay out of the cash flow', skip, async t => {
+test('money moves in and out of the one pot', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.savings = { balance: 800, monthly: null, goals: [] };
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
+  const sav = () => stored(page).then(s => s.money.savings);
+
+  await page.click('[data-act="savMove"][data-d="1"]'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('#dlgForm', e => e.textContent), /Add to savings/);
+  assert.match(await page.$eval('#dlgForm', e => e.textContent), /£800\.00 in the pot now/);
+  await page.fill('#dlgIn', '150');
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
+  assert.equal((await sav()).balance, 950, 'the amount is added, not set');
+  assert.match(await page.$eval('#toast', e => e.textContent), /£150\.00 into savings/);
+
+  await page.click('[data-act="savMove"][data-d="-1"]'); await page.waitForTimeout(300);
+  await page.fill('#dlgIn', '5000');
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
+  assert.equal((await sav()).balance, 0, 'emptied rather than sent negative');
+  assert.match(await page.$eval('#toast', e => e.textContent), /£950\.00 out of savings, now empty/);
+
+  await page.click('#undoBtn'); await page.waitForTimeout(400);
+  assert.equal((await sav()).balance, 950);
+
+  await page.click('[data-act="savMove"][data-d="1"]'); await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(300);   // nothing typed
+  assert.equal((await sav()).balance, 950, 'a blank amount changes nothing');
+  assert.match(await page.$eval('#toast', e => e.textContent), /Type an amount/);
+});
+
+test('old separate pots are folded into the one pot and its list', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  delete data.money.savings;
+  data.money.pots = [                                             // the shape the app used to store
+    { id: '1', name: 'Emergency fund', balance: 1200, target: 3000, monthly: 150 },
+    { id: '2', name: 'Holiday', balance: 800, target: 800, monthly: 0 },
+    { id: '3', name: 'Rainy day', balance: 430, target: null, monthly: 25 }
+  ];
+  const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
+  const s = await stored(page);
+  assert.equal(s.money.savings.balance, 2430, 'the balances add up into one pot');
+  assert.equal(s.money.savings.monthly, 175, 'and so does what goes in each month');
+  assert.deepEqual(s.money.savings.goals.map(g => [g.name, g.cost]),
+    [['Emergency fund', 3000], ['Holiday', 800], ['Rainy day', 430]],
+    'each old pot becomes a thing being saved for, priced at its target');
+  assert.equal(s.money.pots, undefined, 'and the old shape is gone');
+  assert.match(await page.$eval('#view', e => e.textContent), /£2,430\.00/);
+});
+
+test('savings stay out of the cash flow', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
   Object.assign(data.money, { balance: 1000, balanceOn: '2026-09-18', buffer: 0, overdraft: 0 });
   data.money.bills = [{ id: '1', name: 'A', category: 'Other', amount: 100, dueDay: 22, started: '2024-01' }];
-  data.money.pots = [];
+  data.money.savings = { balance: null, monthly: null, goals: [] };
   const bare = await open(t, { on: '2026-09-18', data, tab: 'money' });
   const freeWithout = await bare.$eval('.flowhero .amt', e => e.textContent);
 
-  data.money.pots = [{ id: '1', name: 'Emergency fund', balance: 5000, target: 6000, monthly: 200 }];
-  const withPots = await open(t, { on: '2026-09-18', data, tab: 'money' });
-  assert.equal(await withPots.$eval('.flowhero .amt', e => e.textContent), freeWithout,
+  data.money.savings = { balance: 5000, monthly: 200, goals: [{ id: '1', name: 'Emergency fund', cost: 6000 }] };
+  const withPot = await open(t, { on: '2026-09-18', data, tab: 'money' });
+  assert.equal(await withPot.$eval('.flowhero .amt', e => e.textContent), freeWithout,
     'money already set aside is not money to spend before pay day');
 });
 
 test('the mortgage can be toggled in and out of the net figure', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
-  data.money.pots = [{ id: 'p1', name: 'Omega Seamaster Watch', balance: 0, target: 5600, monthly: 100 }];
+  data.money.savings = { balance: 0, monthly: 100, goals: [{ id: 'g1', name: 'Omega Seamaster Watch', cost: 5600 }] };
   data.money.debts = [
     { id: 'd1', name: 'Lloyds Credit', type: 'Short-term', balance: 1850, repayment: 120, apr: 0.219 },
     { id: 'd2', name: 'Sofa', type: 'Short-term', balance: 640, repayment: 55, apr: null },
@@ -653,10 +713,10 @@ test('the mortgage can be toggled in and out of the net figure', skip, async t =
   data.money.netLongTerm = false;
   const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
   const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
-    .find(c => c.includes('Savings pots'));
+    .find(c => c.includes('Savings pot'));
 
   let c = await card();
-  assert.match(c, /Pots less short-term debt/, 'labelled for what it actually counts');
+  assert.match(c, /Savings less short-term debt/, 'labelled for what it actually counts');
   assert.match(c, /£197,572 of long-term debt left out of this/, 'and says what it is leaving out');
   assert.match(c, /-£2,490\.00/, 'a figure that means something');
   assert.ok(!/-£200,062/.test(c), 'the mortgage no longer swamps it');
@@ -664,19 +724,19 @@ test('the mortgage can be toggled in and out of the net figure', skip, async t =
   await page.click('.switch:has(input[data-set="money.netLongTerm"])');
   await page.waitForTimeout(400);
   c = await card();
-  assert.match(c, /Pots less all debt/);
+  assert.match(c, /Savings less all debt/);
   assert.match(c, /-£200,062\.08/, 'and back again when you ask for it');
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.netLongTerm), true);
 });
 
 test('with no long-term debt the toggle is not offered', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
-  data.money.pots = [{ id: 'p1', name: 'Holiday', balance: 500, target: 1000, monthly: 50 }];
+  data.money.savings = { balance: 500, monthly: 50, goals: [{ id: 'g1', name: 'Holiday', cost: 1000 }] };
   data.money.debts = [{ id: 'd1', name: 'Card', type: 'Short-term', balance: 300, repayment: 50, apr: null }];
   const page = await open(t, { on: '2026-09-18', data, tab: 'money', sec: 'saving' });
   assert.equal(await page.$$eval('[data-set="money.netLongTerm"]', e => e.length), 0, 'nothing to toggle');
   assert.match((await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
-    .find(c => c.includes('Savings pots')), /Pots less short-term debt.*£200\.00/);
+    .find(c => c.includes('Savings pot')), /Savings less short-term debt.*£200\.00/);
 });
 
 test('Money is split into sections, each a screen or two', skip, async t => {
@@ -689,7 +749,7 @@ test('Money is split into sections, each a screen or two', skip, async t => {
   await page.click('[data-act="moneyTab"][data-v="bills"]'); await page.waitForTimeout(250);
   assert.deepEqual(await heads(), ['Bills']);
   await page.click('[data-act="moneyTab"][data-v="saving"]'); await page.waitForTimeout(250);
-  assert.deepEqual(await heads(), ['Savings pots', 'Debt']);
+  assert.deepEqual(await heads(), ['Savings pot', 'Saving for', 'Debt']);
   await page.click('[data-act="moneyTab"][data-v="history"]'); await page.waitForTimeout(250);
   assert.deepEqual(await heads(), ['By year', 'Month by month']);
   assert.ok(await page.$('#chart'), 'the chart lives in History');
@@ -768,7 +828,7 @@ test('Home is a dashboard: attention items, this week, and headline tiles', skip
     { id: '3', name: 'Energy', category: 'Utilities', amount: 96, dueDay: 20, started: '2024-01' },
     { id: '4', name: 'Gym', category: 'Health & Fitness', amount: 32, dueDay: null, started: '2024-01' }
   ];
-  data.money.pots = [{ id: 'p1', name: 'Holiday', balance: 400, target: 1000, monthly: 100 }];
+  data.money.savings = { balance: 400, monthly: 100, goals: [{ id: 'p1', name: 'Holiday', cost: 1000 }] };
   const page = await open(t, { on: '2026-09-09', data });   // 16 days to pay day, balance 8 days old
   const heads = await page.$$eval('#view .card h2', es => es.map(e => e.firstChild.textContent.trim()));
   assert.deepEqual(heads, ['Needs a look', 'This week', 'Saving', 'Everything else']);
@@ -784,7 +844,7 @@ test('Home is a dashboard: attention items, this week, and headline tiles', skip
   assert.match(await page.$eval('#view', e => e.textContent), /1 more before pay day/);
 
   const tiles = await page.$$eval('.tile .cap', es => es.map(e => e.textContent));
-  assert.deepEqual(tiles, ['Safe to spend', 'Next pay day', 'Saved this year', 'Pots less short-term debt']);
+  assert.deepEqual(tiles, ['Safe to spend', 'Next pay day', 'Saved this year', 'Savings less short-term debt']);
   assert.match(await page.$eval('.tiles', e => e.textContent), /in 16 days · Fri 25 Sep/);
 
   await page.click('.attnrow'); await page.waitForTimeout(300);
@@ -875,18 +935,17 @@ test('Ctrl+Z undoes outside a field and is left to the browser inside one', skip
   await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
   assert.equal((await stored(page)).money.debts.length, 0, 'debt removed');
 
-  await page.click('[data-act="toggle"][data-key="editPots"]'); await page.waitForTimeout(250);
-  await page.click('[data-act="addPot"]'); await page.waitForTimeout(300);
-  await page.focus('[data-set="money.pots.0.name"]');
+  await page.click('[data-act="addGoal"]'); await page.waitForTimeout(300);
+  await page.focus('[data-set="money.savings.goals.0.name"]');
   await page.keyboard.press('Control+z'); await page.waitForTimeout(300);
   let s = await stored(page);
-  assert.equal(s.money.pots.length, 1, 'inside a text field Ctrl+Z is not the app\'s');
+  assert.equal(s.money.savings.goals.length, 1, 'inside a text field Ctrl+Z is not the app\'s');
   assert.equal(s.money.debts.length, 0);
 
   await page.evaluate(() => document.activeElement.blur());
   await page.keyboard.press('Control+z'); await page.waitForTimeout(350);
   s = await stored(page);
-  assert.equal(s.money.pots.length, 0, 'the added pot goes first');
+  assert.equal(s.money.savings.goals.length, 0, 'the added thing goes first');
   await page.keyboard.press('Control+z'); await page.waitForTimeout(350);
   s = await stored(page);
   assert.equal(s.money.debts.length, 1, 'then the removed debt comes back');
@@ -1089,4 +1148,25 @@ test('the app asks the browser to keep the data', skip, async t => {
     .find(c => c.includes('About'));
   assert.match(about, /Storage/, 'Settings says where the data stands');
   if (asked) assert.match(about, /permanent|may clear this/, 'and what the browser said');
+});
+
+
+
+
+test('Home shows the next thing you are saving for, and no buttons', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.savings = { balance: 2000, monthly: 150, goals: [
+    { id: 'g1', name: 'Omega Seamaster', cost: 5600, got: null, paid: null },
+    { id: 'g2', name: 'Holiday', cost: 800, got: null, paid: null } ] };
+  const page = await open(t, { on: '2026-09-18', data });
+  const card = (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('Saving'));
+  assert.match(card, /£2,000 in the pot/);
+  assert.match(card, /Omega Seamaster/, 'the next one out of reach, not one already covered');
+  assert.doesNotMatch(card, /Holiday/);
+  assert.equal(await page.$$eval('[data-act="goalGot"], [data-act="savMove"]', e => e.length), 0,
+    'the dashboard is for reading');
+  await page.click('[data-act="tab"][data-tab="money"][data-sec="saving"]');
+  await page.waitForTimeout(300);
+  assert.ok(await page.$('[data-act="goalGot"]'), 'the buttons live where the savings do');
 });

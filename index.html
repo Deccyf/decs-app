@@ -204,6 +204,9 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .step input{flex:1;border:0;text-align:center;font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;
   width:100%;min-width:0;padding:11px 0;background:var(--fld);-moz-appearance:textfield}
 .step input::-webkit-inner-spin-button,.step input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+/* an amount typed into a dialog: a keypad, and no spinner arrows to fat-finger */
+.amtin{-moz-appearance:textfield;font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+.amtin::-webkit-inner-spin-button,.amtin::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 
 /* Buttons */
 .btn{border:0;background:var(--brand);color:var(--on-brand);font-weight:700;padding:11px 16px;
@@ -307,7 +310,10 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .bar i{display:block;height:100%;background:var(--forest);border-radius:var(--r-full);transition:width .3s}
 .bar.teal i{background:var(--teal)}.bar.amber i{background:var(--amber)}.bar.coral i{background:var(--coral)}
 .prow{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:9px 0;border-bottom:1px solid var(--line);align-items:center}
-.prow:last-child{border-bottom:0}.prow .bar{grid-column:1/-1}
+.prow:last-child{border-bottom:0}
+/* the bar and the buttons are grid items of .prow, so they are what has to span */
+.prow .pb,.prow .potact{grid-column:1/-1}
+.potact{display:flex;gap:8px;margin-top:2px}
 .tick{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
 .tick .box{width:28px;height:28px;border-radius:var(--r-xs);border:2px solid var(--fld-brd);flex:0 0 28px;
   display:grid;place-items:center;color:#fff;font-weight:800;font-size:15px;background:var(--fld);cursor:pointer;padding:0}
@@ -474,7 +480,11 @@ body.locked header,body.locked main,body.locked .tabs{display:none}
     "bills": [],
     "months": [],
     "debts": [],
-    "pots": []
+    "savings": {
+      "balance": null,
+      "monthly": null,
+      "goals": []
+    }
   },
   "house": [],
   "classic": [],
@@ -955,32 +965,46 @@ const C = (() => {
      A pot is a balance you have put aside, optionally with something you are
      saving towards and what you put in each month. Everything else follows from
      those three numbers, so nothing needs keeping in step by hand. */
-  function potsCalc(pots, debts, tod, withLong) {
+  /* One pot of money, and a list of what it is for.
+     Savings are not really separate piles — it is one balance, and the things
+     being saved for are a shopping list it has to stretch across. So every goal
+     is measured against the whole balance: what it costs, whether there is
+     enough for it yet, and how long until there is. Buying one takes its price
+     out of the pot and moves it to the got list. */
+  function savingsCalc(sav, debts, tod, withLong) {
+    sav = sav || {};
     tod = tod || today();
-    const list = (pots || []).map(p => {
-      const balance = num(p.balance), target = num(p.target), monthly = num(p.monthly);
-      const toGo = target ? r2(Math.max(target - balance, 0)) : null;
-      const months = (toGo && monthly > 0) ? Math.ceil(toGo / monthly) : null;
-      return { ...p, balance, target, monthly, toGo,
-        pct: target ? Math.min(balance / target, 1) : null,
-        done: !!target && balance >= target,
+    const balance = r2(num(sav.balance)), monthly = num(sav.monthly);
+    const all = (sav.goals || []).map(g => ({ ...g, cost: num(g.cost), paid: num(g.paid) }));
+    const got = all.filter(g => g.got).sort((a, b) => String(b.got).localeCompare(String(a.got)));
+    const goals = all.filter(g => !g.got).map(g => {
+      const short = r2(Math.max(g.cost - balance, 0));
+      const months = (short > 0 && monthly > 0) ? Math.ceil(short / monthly) : null;
+      return { ...g, short, covered: g.cost > 0 && balance >= g.cost,
+        pct: g.cost > 0 ? Math.min(balance / g.cost, 1) : null,
         months, by: months ? addMonths(tod, months) : null,
-        // a pot with a target but nothing going in is stuck where it is
-        stalled: !!target && balance < target && !monthly };
-    });
-    const total = r2(list.reduce((a, p) => a + p.balance, 0));
+        // nothing going in and not there yet: it is not arriving on its own
+        stalled: short > 0 && !monthly };
+    // what you could have next first, then whatever is closest to affordable
+    }).sort((a, b) => a.short - b.short || a.cost - b.cost);
+    const wanted = r2(goals.reduce((a, g) => a + g.cost, 0));
+    const toGo = r2(Math.max(wanted - balance, 0));
+    const allMonths = (toGo > 0 && monthly > 0) ? Math.ceil(toGo / monthly) : null;
     /* A mortgage dwarfs everything else and is not getting cleared this decade,
        so counting it turns the net figure into one big number that never moves.
        Long-term debt is opt-in; anything without a type counts, since only an
        explicit "Long-term" is being set aside. */
-    const all = debts || [];
-    const longTotal = r2(all.filter(d => d.type === 'Long-term').reduce((a, d) => a + num(d.balance), 0));
-    const allTotal = r2(all.reduce((a, d) => a + num(d.balance), 0));
+    const list = debts || [];
+    const longTotal = r2(list.filter(d => d.type === 'Long-term').reduce((a, d) => a + num(d.balance), 0));
+    const allTotal = r2(list.reduce((a, d) => a + num(d.balance), 0));
     const debtTotal = withLong ? allTotal : r2(allTotal - longTotal);
-    return { list, total, debtTotal, longTotal, allTotal, withLong: !!withLong, net: r2(total - debtTotal),
-      totalMonthly: r2(list.reduce((a, p) => a + p.monthly, 0)),
-      targeted: list.filter(p => p.target).length,
-      done: list.filter(p => p.done).length };
+    return { balance, monthly, goals, got, wanted, toGo,
+      spare: r2(balance - wanted),
+      months: allMonths, by: allMonths ? addMonths(tod, allMonths) : null,
+      next: goals.find(g => !g.covered) || null,
+      affordable: goals.filter(g => g.covered).length,
+      spent: r2(got.reduce((a, g) => a + (g.paid || g.cost), 0)),
+      debtTotal, longTotal, allTotal, withLong: !!withLong, net: r2(balance - debtTotal) };
   }
 
   /* ---------- bill price history ----------
@@ -1085,7 +1109,7 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, priceHistory, potsCalc, spendLog, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 
 /* ===== app: state, views, events ===== */
@@ -1100,7 +1124,7 @@ const $ = s => document.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 let S, storageOK = true, tab = 'home', theme = 'auto';
 const ui = { payday: null, openYears: {}, showAllMonths: false, editBills: false, editDebts: false, editFixed: false,
-  editJobs: false, editPots: false, moneyTab: 'now', showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
+  editJobs: false, editGoals: false, moneyTab: 'now', showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
 
 const TABS = [
   { k: 'home', l: 'Home', d: 'M3 10.6 12 3.4l9 7.2M5.6 9.4V20a1 1 0 0 0 1 1h10.8a1 1 0 0 0 1-1V9.4' },
@@ -1211,7 +1235,34 @@ function normalize() {
   ['house', 'classic', 'mega', 'psm', 'games'].forEach(k => arr(S, k));
   obj(S, 'money'); obj(S, 'pay');
   const m = S.money;
-  ['bills', 'months', 'debts', 'pots'].forEach(k => arr(m, k));
+  ['bills', 'months', 'debts'].forEach(k => arr(m, k));
+  /* Savings used to be several pots, each holding its own money. It is really
+     one balance with a shopping list against it, so the old pots are added up
+     into that balance and each becomes a thing being saved for. Runs once: an
+     older backup restored later is folded in the same way. */
+  if (!m.savings || typeof m.savings !== 'object' || Array.isArray(m.savings)) {
+    const old = Array.isArray(m.pots) ? m.pots : [];
+    const sum = k => old.reduce((a, p) => a + C.num(p[k]), 0);
+    m.savings = {
+      balance: old.length ? C.r2(sum('balance')) : null,
+      monthly: sum('monthly') ? C.r2(sum('monthly')) : null,
+      goals: old.map(p => ({ id: p.id || uid(), name: p.name || '',
+        cost: C.num(p.target) || C.num(p.balance) || null, got: null, paid: null }))
+        .filter(g => g.name || g.cost)
+    };
+  }
+  delete m.pots;
+  const sv = m.savings;
+  if (sv.balance === undefined) sv.balance = null;
+  if (sv.monthly === undefined) sv.monthly = null;
+  if (!Array.isArray(sv.goals)) sv.goals = [];
+  sv.goals = sv.goals.filter(g => g && typeof g === 'object');
+  sv.goals.forEach(g => {
+    if (!g.id) g.id = uid();
+    if (g.cost === undefined) g.cost = null;
+    if (g.got === undefined) g.got = null;
+    if (g.paid === undefined) g.paid = null;
+  });
   if (m.buffer === undefined) m.buffer = 0;
   if (m.overdraft === undefined) m.overdraft = 0;
   if (m.amex === undefined) m.amex = null;
@@ -1229,7 +1280,6 @@ function normalize() {
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
   m.bills.forEach(b => { if (!b.id) b.id = uid(); if (b.dueDay === undefined) b.dueDay = null; });
   m.debts.forEach(d => { if (!d.id) d.id = uid(); });
-  m.pots.forEach(p => { if (!p.id) p.id = uid(); });
   m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
      Unsorted rows make "latest month" and the chart wrong; duplicates double
@@ -1351,7 +1401,9 @@ function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = f
   return new Promise(resolve => {
     const d = $('#dlg'), f = $('#dlgForm');
     f.innerHTML = `<h3>${esc(title)}</h3>${body ? `<p>${body}</p>` : ''}
-      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${inputType === 'password' ? ' inputmode="numeric" class="pinin"' : ''}></div>` : ''}
+      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${
+        inputType === 'password' ? ' inputmode="numeric" class="pinin"'
+        : inputType === 'number' ? ' inputmode="decimal" step="any" class="amtin"' : ''}></div>` : ''}
       <div class="btnrow"><button class="btn ghost" value="cancel" type="submit">${esc(cancel)}</button>
       <button class="btn${danger ? ' danger' : ''}" value="ok" type="submit">${esc(ok)}</button></div>`;
     const done = () => {
@@ -1550,7 +1602,7 @@ const VIEWS = {
     const nx = p.rows[p.nextIdx] || null, tod = C.today();
     const fl = C.runway(S.money, p, flowOpt());
     const per = C.periodFlows(S.money, p, flowOpt(), 1)[0] || null;
-    const pots = C.potsCalc(S.money.pots, S.money.debts, null, S.money.netLongTerm);
+    const pots = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
     const yr = m.yearRow;
     let h = '';
     if (SEED.generic && !S.money.months.length && !S.money.bills.length && !S.games.length && !S.classic.length)
@@ -1571,7 +1623,7 @@ const VIEWS = {
       .forEach(x => attn.push(['', `<b>${esc(x.name)}</b> ${x.last.diff > 0 ? 'went up' : 'came down'} ${C.gbp(Math.abs(x.last.diff))} a month in ${esc(C.fmtMs(x.last.month))}.`, 'bills']));
     /* The figures live on this phone and nowhere else. Say so before it matters,
        not after — and only once there is something worth losing. */
-    const anyData = S.money.bills.length || S.money.months.length || S.money.pots.length || S.games.length || S.classic.length;
+    const anyData = S.money.bills.length || S.money.months.length || pots.goals.length || pots.balance || S.games.length || S.classic.length;
     const backupAge = S.backupOn ? C.daysBetween(S.backupOn, tod) : null;
     if (anyData && backupAge === null) attn.push(['', `<b>No backup yet.</b> Lose this phone and these figures go with it.`, 'settings']);
     else if (backupAge !== null && backupAge >= 30) attn.push(['', `<b>Last backup was ${backupAge} days ago.</b> Worth downloading a fresh one.`, 'settings']);
@@ -1589,8 +1641,8 @@ const VIEWS = {
             per ? C.gbp(per.net, 0) + ' pay less ' + C.gbp(per.outgoings, 0) + ' bills' : 'add your pay details')}
       ${tile('navy', 'Next pay day', nx ? C.gbp(nx.net, 0) : '–', nx ? (fl.days === 0 ? 'today' : 'in ' + fl.days + ' day' + (fl.days === 1 ? '' : 's')) + ' · ' + esc(C.fmtDow(nx.payday)) : '')}
       ${tile('amber', 'Saved this year', C.gbp(yr && yr.saved, 0), yr && yr.rate != null ? C.pct(yr.rate) + ' of ' + yr.year + ' earnings' : '')}
-      ${tile(pots.net < 0 ? 'coral' : 'forest', 'Pots less ' + (pots.withLong ? 'debt' : 'short-term debt'), C.gbp(pots.net, 0),
-        pots.list.length || pots.allTotal ? C.gbp(pots.total, 0) + ' put away · ' + C.gbp(pots.debtTotal, 0) + ' owed' : 'nothing put away yet')}
+      ${tile(pots.net < 0 ? 'coral' : 'forest', 'Savings less ' + (pots.withLong ? 'debt' : 'short-term debt'), C.gbp(pots.net, 0),
+        pots.balance || pots.allTotal ? C.gbp(pots.balance, 0) + ' saved · ' + C.gbp(pots.debtTotal, 0) + ' owed' : 'nothing put away yet')}
     </div>`;
 
     /* the next seven days, with pay day in its place if it falls inside them */
@@ -1610,12 +1662,11 @@ const VIEWS = {
       <div class="muted small lead">${nx.ot || 0} overtime hrs · ${nx.sun || 0} Sunday hrs · period ${esc(C.fmtDM(nx.start))} – ${esc(C.fmtDM(nx.end))}</div>
       <button class="btn teal" data-act="tab" data-tab="pay">Log hours</button></div>`;
 
-    if (pots.list.length) {
-      // the pot nearest to arriving, else the first
-      const live = pots.list.filter(x => x.target && !x.done);
-      const focus = live.sort((a, b) => (a.by || '9999') < (b.by || '9999') ? -1 : 1)[0] || pots.list[0];
-      h += `<div class="card"><h2>Saving<span class="hint">${C.gbp(pots.total, 0)} put away</span></h2>${potRow(focus)}
-        <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money" data-sec="saving">All pots</button></div></div>`;
+    if (pots.balance || pots.goals.length || pots.got.length) {
+      const focus = pots.next || pots.goals[0] || null;    // the next thing you cannot afford yet
+      h += `<div class="card"><h2>Saving<span class="hint">${C.gbp(pots.balance, 0)} in the pot</span></h2>
+        ${focus ? goalRow(focus) : '<div class="muted">Nothing on the list yet.</div>'}
+        <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money" data-sec="saving">Open savings</button></div></div>`;
     }
 
     const done = S.house.filter(j => j.status === 'Done').length, tot = S.house.length;
@@ -1785,23 +1836,38 @@ const VIEWS = {
 
     }
     if (sec === 'saving') {
-    /* --- 4c. savings pots --- */
-    const pots = C.potsCalc(S.money.pots, S.money.debts, null, S.money.netLongTerm);
-    h += `<div class="card"><h2>Savings pots${pots.list.length ? `<span class="hint">${pots.done ? pots.done + ' hit' : pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</span>` : ''}</h2>
-      <div class="row"><div class="l"><b>Put away</b><small>${pots.totalMonthly ? C.gbp(pots.totalMonthly) + ' a month going in' : 'across ' + pots.list.length + ' pot' + (pots.list.length === 1 ? '' : 's')}</small></div><div class="strong num">${C.gbp(pots.total)}</div></div>
-      ${pots.allTotal ? `<div class="row"><div class="l"><b>Pots less ${pots.withLong ? 'all' : 'short-term'} debt</b>
-          <small>${pots.withLong ? 'what you would have if you cleared everything today'
-            : pots.longTotal ? C.gbp(pots.longTotal, 0) + ' of long-term debt left out of this' : 'what you would have if you cleared everything today'}</small></div>
-        <div class="strong num ${pots.net < 0 ? 'neg' : 'pos'}">${C.gbp(pots.net)}</div></div>
-      ${pots.longTotal ? toggle('money.netLongTerm', S.money.netLongTerm, 'Count long-term debt too',
+    /* --- 4c. the savings pot, and the list it has to stretch across --- */
+    const sv = C.savingsCalc(S.money.savings, S.money.debts, null, S.money.netLongTerm);
+    h += `<div class="card"><h2>Savings pot${sv.monthly ? `<span class="hint">${C.gbp(sv.monthly)} a month going in</span>` : ''}</h2>
+      <div class="flowhero"><div><div class="amt">${C.gbp(sv.balance)}</div>
+        <div class="muted small">put away${sv.goals.length ? ` · the list comes to ${C.gbp(sv.wanted, 0)}` : ''}</div></div></div>
+      <div class="btnrow"><button class="btn teal" data-act="savMove" data-d="1">Add</button><button class="btn ghost" data-act="savMove" data-d="-1">Take out</button></div>
+      <div class="grid2 mt10">${field('Going in each month', inp('money.savings.monthly', S.money.savings.monthly, 'number', 'placeholder="0"'))}</div>
+      ${sv.allTotal ? `<div class="sep"></div><div class="row"><div class="l"><b>Savings less ${sv.withLong ? 'all' : 'short-term'} debt</b>
+          <small>${sv.withLong ? 'what you would have if you cleared everything today'
+            : sv.longTotal ? C.gbp(sv.longTotal, 0) + ' of long-term debt left out of this' : 'what you would have if you cleared everything today'}</small></div>
+        <div class="strong num ${sv.net < 0 ? 'neg' : 'pos'}">${C.gbp(sv.net)}</div></div>
+      ${sv.longTotal ? toggle('money.netLongTerm', S.money.netLongTerm, 'Count long-term debt too',
         'A mortgage is not getting cleared this year, so leaving it out keeps this figure about the debt you are actually chipping away at.') : ''}` : ''}
-      ${ui.editPots ? S.money.pots.map((p, i) => `<div class="erow"><div class="full">${field('Pot', inp(`money.pots.${i}.name`, p.name, 'text'))}</div>
-          ${field('Balance', inp(`money.pots.${i}.balance`, p.balance))}${field('Saving towards (optional)', inp(`money.pots.${i}.target`, p.target, 'number', 'placeholder="none"'))}
-          ${field('Going in each month', inp(`money.pots.${i}.monthly`, p.monthly, 'number', 'placeholder="0"'))}
-          <div class="full"><button class="btn danger sm" data-act="delPot" data-i="${i}">Remove ${esc(p.name || 'pot')}</button></div></div>`).join('') || '<div class="empty">No pots yet.</div>'
-        : pots.list.map(potRow).join('') || '<div class="empty">No pots yet. Add one to track what you are putting aside.</div>'}
-      <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editPots">${ui.editPots ? 'Done' : 'Edit pots'}</button>${ui.editPots ? '<button class="btn sm" data-act="addPot">Add pot</button>' : ''}</div>
-      <div class="note">Pots sit outside the cash flow in <b>Now</b> — money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account. Put what goes in each month against a pot and it works out when you will get there.</div></div>`;
+      <div class="note"><b>Add</b> and <b>Take out</b> move money as you go — type the amount that moved, not the new total.
+      The pot sits outside the cash flow in <b>Now</b>: money already set aside, not money to spend before pay day. Use the buffer for what you keep in the current account.</div></div>`;
+
+    /* --- 4d. what the pot is for --- */
+    h += `<div class="card"><h2>Saving for${sv.goals.length ? `<span class="hint">${sv.affordable ? sv.affordable + ' you can get now' : sv.goals.length + ' thing' + (sv.goals.length === 1 ? '' : 's')}</span>` : ''}</h2>
+      ${sv.goals.length ? `<div class="results">
+        <div class="r"><span>Everything on the list</span><span class="num">${C.gbp(sv.wanted)}</span></div>
+        <div class="r"><span>In the pot</span><span class="num">${C.gbp(sv.balance)}</span></div>
+        <div class="r total"><span>${sv.toGo ? 'Still to save' : 'Spare after the lot'}</span>
+          <span class="num ${sv.toGo ? 'neg' : 'pos'}">${C.gbp(sv.toGo || sv.spare)}</span></div></div>
+        ${sv.months ? `<div class="note">At ${C.gbp(sv.monthly)} a month you would have the lot by ${esc(C.fmtM(C.mkey(sv.by)))}.</div>` : ''}
+        <div class="sep"></div>` : ''}
+      ${ui.editGoals ? S.money.savings.goals.map((g, i) => `<div class="erow"><div class="full">${field('Saving for', inp(`money.savings.goals.${i}.name`, g.name, 'text'))}</div>
+          ${field('What it costs', inp(`money.savings.goals.${i}.cost`, g.cost))}${field('Got it on', inp(`money.savings.goals.${i}.got`, g.got, 'date'))}
+          <div class="full"><button class="btn danger sm" data-act="delGoal" data-id="${esc(g.id)}">Remove ${esc(g.name || 'this')}</button></div></div>`).join('') || '<div class="empty">Nothing on the list yet.</div>'
+        : sv.goals.map(g => goalRow(g, true)).join('') || '<div class="empty">Nothing on the list yet. Add what you are saving up for and the pot gets measured against it.</div>'}
+      <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editGoals">${ui.editGoals ? 'Done' : 'Edit list'}</button><button class="btn sm" data-act="addGoal">Add something</button></div>
+      ${sv.got.length ? detailsBlock('gotlist', `Already got (${sv.got.length}) · ${C.gbp(sv.spent, 0)}`, sv.got.map(gotRow).join('')) : ''}
+      <div class="note">Every price here is measured against the whole pot, because it is one pile of money. <b>Got it</b> takes what you paid out of the pot and moves the thing down to <b>Already got</b>.</div></div>`;
 
     /* --- 5. debt --- */
     h += `<div class="card"><h2>Debt</h2><div class="row"><div class="l"><b>Total owed</b><small>${C.gbp(m.repayTotal)} a month in repayments</small></div><div class="strong num">${C.gbp(m.debtTotal)}</div></div>
@@ -1860,15 +1926,26 @@ function ledgerRow(e, runningBal, gone) {
     <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
     <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
 }
-function potRow(p) {
-  return `<div class="prow"><div><b>${esc(p.name || 'Pot')}</b>
-      <small class="meta">${p.target
-        ? (p.done ? 'target of ' + C.gbp(p.target, 0) + ' reached'
-          : C.gbp(p.toGo) + ' to go of ' + C.gbp(p.target, 0)
-            + (p.by ? ' · there by ' + esc(C.fmtM(C.mkey(p.by))) : p.stalled ? ' · nothing going in' : ''))
-        : (p.monthly ? C.gbp(p.monthly) + ' a month, no target set' : 'no target set')}</small></div>
-    <div class="num tr"><b>${C.gbp(p.balance)}</b>${p.target ? `<div class="muted small">${C.pct(p.pct)}</div>` : ''}</div>
-    ${p.target ? `<div class="pb">${bar(p.pct, p.done ? '' : 'teal')}</div>` : ''}</div>`;
+/* One thing being saved for, measured against the whole pot. `actions` adds the
+   Got it button: Money gets it, Home does not, since the dashboard is for
+   reading and money is moved where the savings live. */
+function goalRow(g, actions) {
+  return `<div class="prow"><div><b>${esc(g.name || 'Something')}</b>
+      <small class="meta">${g.cost
+        ? (g.covered ? 'you have enough for this'
+          : C.gbp(g.short) + ' short'
+            + (g.by ? ' · there by ' + esc(C.fmtM(C.mkey(g.by))) : g.stalled ? ' · nothing going in' : ''))
+        : 'no price on it yet'}</small></div>
+    <div class="num tr"><b>${C.gbp(g.cost)}</b>${g.pct !== null ? `<div class="muted small">${C.pct(g.pct)}</div>` : ''}</div>
+    ${g.pct !== null ? `<div class="pb">${bar(g.pct, g.covered ? '' : 'teal')}</div>` : ''}
+    ${actions === true ? `<div class="potact">
+      <button class="btn ${g.covered ? 'teal' : 'ghost'} sm" data-act="goalGot" data-id="${esc(g.id)}">Got it</button></div>` : ''}</div>`;
+}
+/* Something already bought, and what actually came out of the pot for it. */
+function gotRow(g) {
+  return `<div class="row"><div class="l"><b>${esc(g.name || 'Something')}</b>
+      <small>got ${esc(C.fmtD(g.got))}${g.paid && g.cost && C.r2(g.paid) !== C.r2(g.cost) ? ' · listed at ' + C.gbp(g.cost, 0) : ''}</small></div>
+    <div class="num tr">${C.gbp(g.paid)}<button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div></div>`;
 }
 /* ---- the Pay tab, in pieces ---- */
 const resRow = (l, v, cls = '') => `<div class="r ${cls}"><span>${esc(l)}</span><span class="num">${v}</span></div>`;
@@ -1959,7 +2036,7 @@ function spendCard(sp, fl) {
 }
 function aboutCard() {
   const m = S.money;
-  const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [m.pots.length, 'pot'], [m.debts.length, 'debt'],
+  const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [(m.savings.goals || []).length, 'saving goal'], [m.debts.length, 'debt'],
     [S.house.length, 'house job'], [S.classic.length + S.mega.length, 'card'], [S.psm.length, 'magazine'], [S.games.length, 'game']]
     .filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`).join(' · ');
   return `<div class="card"><h2>About</h2>
@@ -2201,8 +2278,47 @@ document.addEventListener('click', async e => {
   if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit('adding a bill'); return; }
   if (a === 'delBill') { const b = S.money.bills[+d.i]; if (await confirmDlg('Remove this bill?', esc(b.name || ''))) { drop(S.money.bills, b); removed(b.name || 'a bill'); } return; }
   if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(`adding ${C.fmtM(k)}`); toast('Added ' + C.fmtM(k)); } return; }
-  if (a === 'addPot') { S.money.pots.push({ id: uid(), name: '', balance: null, target: null, monthly: null }); ui.editPots = true; commit('adding a pot'); return; }
-  if (a === 'delPot') { const p = S.money.pots[+d.i]; if (await confirmDlg('Remove this pot?', esc(p.name || ''))) { drop(S.money.pots, p); removed(p.name || 'a pot'); } return; }
+  /* Money in and out of the pot as it happens: the amount moved, not a new
+     total. Typing the total again is how you lose track of what went in. */
+  if (a === 'savMove') {
+    const sv = S.money.savings, up = +d.d > 0;
+    const v = await dialog({ title: up ? 'Add to savings' : 'Take out of savings',
+      body: `${C.gbp(C.num(sv.balance))} in the pot now. Type what you are moving.`,
+      ok: up ? 'Add' : 'Take out', input: '', inputType: 'number' });
+    if (v === null) return;
+    const amt = Math.abs(parseFloat(v));
+    if (!amt || isNaN(amt)) { toast('Type an amount first'); return; }
+    const was = C.num(sv.balance);
+    sv.balance = C.r2(up ? was + amt : Math.max(0, was - amt));   // the pot cannot hold less than nothing
+    const moved = C.r2(Math.abs(sv.balance - was));
+    commit(up ? 'adding to savings' : 'taking from savings');
+    toast(`${C.gbp(moved)} ${up ? 'into' : 'out of'} savings${!up && !sv.balance ? ', now empty' : ''}`, UNDO);
+    return;
+  }
+  /* Bought one of the things on the list: its price comes out of the pot and it
+     moves down to Already got. The figure is only a suggestion — what you
+     actually paid is what leaves. */
+  if (a === 'goalGot') {
+    const sv = S.money.savings, g = sv.goals.find(x => x.id === d.id);
+    if (!g) return;
+    const name = g.name || 'it';
+    const v = await dialog({ title: `Got ${esc(name)}?`,
+      body: `${C.gbp(C.num(sv.balance))} in the pot. Change the figure if you paid something else.`,
+      ok: 'Take it out', cancel: 'Not yet', input: C.num(g.cost) || '', inputType: 'number' });
+    if (v === null) return;
+    const amt = Math.abs(parseFloat(v));
+    if (isNaN(amt)) { toast('Type what you paid'); return; }
+    const was = C.num(sv.balance);
+    sv.balance = C.r2(Math.max(0, was - amt));
+    g.paid = C.r2(Math.min(amt, was));                   // what genuinely left the pot
+    g.got = C.today();
+    commit(`getting ${name}`);
+    toast(`${C.gbp(g.paid)} out for ${name}`, UNDO);
+    return;
+  }
+  if (a === 'addGoal') { S.money.savings.goals.push({ id: uid(), name: '', cost: null, got: null, paid: null }); ui.editGoals = true; commit('adding to the list'); return; }
+  if (a === 'delGoal') { const sv = S.money.savings, g = sv.goals.find(x => x.id === d.id);
+    if (g && await confirmDlg('Take this off the list?', esc(g.name || ''))) { drop(sv.goals, g); removed(g.name || 'it'); } return; }
   if (a === 'addDebt') { S.money.debts.push({ id: uid(), name: '', type: 'Short-term', balance: null, repayment: null, apr: null, notes: '' }); commit('adding a debt'); return; }
   if (a === 'delDebt') { const x = S.money.debts[+d.i]; if (await confirmDlg('Remove this debt?', esc(x.name || ''))) { drop(S.money.debts, x); removed(x.name || 'a debt'); } return; }
   if (a === 'addYear') { const Y = S.pay.taxYears, last = Y[Y.length - 1];

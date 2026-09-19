@@ -469,89 +469,102 @@ test('the projection shows the card coming off without touching stored figures',
 });
 
 
-/* ----------------------------------------------------------- savings pots -- */
-const POTS = [
-  { id: '1', name: 'Emergency fund', balance: 1200, target: 3000, monthly: 150 },
-  { id: '2', name: 'Holiday', balance: 800, target: 800, monthly: 0 },
-  { id: '3', name: 'New telly', balance: 150, target: 900, monthly: 0 },
-  { id: '4', name: 'Rainy day', balance: 430, target: null, monthly: 25 }
-];
+/* --------------------------------------------------------------- savings -- */
+const SAV = {
+  balance: 2450, monthly: 150,
+  goals: [
+    { id: '1', name: 'Omega Seamaster', cost: 5600, got: null, paid: null },
+    { id: '2', name: 'Holiday', cost: 800, got: null, paid: null },
+    { id: '3', name: 'New bike', cost: 2200, got: null, paid: null },
+    { id: '4', name: 'Headphones', cost: 250, got: '2026-08-02', paid: 230 }
+  ]
+};
+const sav = (extra, debts) => C.savingsCalc(Object.assign({}, SAV, extra), debts || [], '2026-09-18', false);
 
-test('pots total up and net off against debt', () => {
-  const r = C.potsCalc(POTS, [{ balance: 1850 }, { balance: 640 }], '2026-09-18');
-  assert.equal(r.total, 2580);
-  assert.equal(r.debtTotal, 2490);
-  assert.equal(r.net, 90, 'what would be left if everything were settled today');
-  assert.equal(r.totalMonthly, 175);
-  assert.equal(r.targeted, 3);
-  assert.equal(r.done, 1);
+test('one pot is measured against everything on the list', () => {
+  const r = sav();
+  assert.equal(r.balance, 2450, 'the pot is a single balance');
+  assert.equal(r.wanted, 8600, 'the three things still wanted, not the one already got');
+  assert.equal(r.toGo, 6150);
+  assert.equal(r.spare, -6150, 'negative until the pot covers the lot');
+  assert.equal(r.goals.length, 3, 'bought things drop off the list');
+  assert.equal(r.got.length, 1);
+  assert.equal(r.spent, 230, 'what actually came out of the pot, not the listed price');
 });
 
-test('a target works out what is left and when it lands', () => {
-  const [emergency, holiday, telly, rainy] = C.potsCalc(POTS, [], '2026-09-18').list;
-  assert.equal(emergency.toGo, 1800);
-  assert.equal(emergency.months, 12, '£1,800 at £150 a month');
-  assert.equal(emergency.by, '2027-09-18');
-  assert.equal(emergency.done, false);
-
-  assert.equal(holiday.done, true, 'balance has reached the target');
-  assert.equal(holiday.toGo, 0);
-  assert.equal(holiday.pct, 1);
-
-  assert.equal(telly.stalled, true, 'a target with nothing going in never arrives');
-  assert.equal(telly.by, null, 'so no date is invented');
-  assert.equal(telly.months, null);
-
-  assert.equal(rainy.target, 0, 'no target set');
-  assert.deepEqual([rainy.toGo, rainy.pct, rainy.by], [null, null, null], 'and nothing is inferred from one');
+test('each thing is priced against the whole pot, not a share of it', () => {
+  const [holiday, bike, watch] = sav().goals;
+  // £2,450 in the pot covers the £800 holiday and the £2,200 bike on their own
+  assert.deepEqual([holiday.name, holiday.covered, holiday.short], ['Holiday', true, 0]);
+  assert.deepEqual([bike.name, bike.covered, bike.short], ['New bike', true, 0]);
+  assert.deepEqual([watch.name, watch.covered, watch.short], ['Omega Seamaster', false, 3150]);
+  assert.equal(sav().affordable, 2, 'two of them could be bought today');
+  assert.equal(sav().next.name, 'Omega Seamaster', 'the next one out of reach');
 });
 
-test('a pot past its target does not report over 100 per cent', () => {
-  const [over] = C.potsCalc([{ name: 'Over', balance: 1200, target: 1000, monthly: 50 }], [], '2026-09-18').list;
-  assert.equal(over.pct, 1);
-  assert.equal(over.toGo, 0);
-  assert.equal(over.done, true);
-  assert.equal(over.months, null, 'nothing left to wait for');
+test('the list is ordered by what you can get soonest', () => {
+  assert.deepEqual(sav().goals.map(g => g.name), ['Holiday', 'New bike', 'Omega Seamaster']);
 });
 
-test('pots cope with nothing in them', () => {
-  const empty = C.potsCalc([], [], '2026-09-18');
-  assert.deepEqual([empty.total, empty.net, empty.totalMonthly, empty.list.length], [0, 0, 0, 0]);
-  const blank = C.potsCalc([{ name: '' }], [], '2026-09-18');
-  assert.equal(blank.total, 0);
-  assert.equal(blank.list[0].balance, 0, 'a half-filled pot reads as zero rather than breaking');
+test('what goes in each month says when the pot gets there', () => {
+  const r = sav();
+  assert.equal(r.goals[2].months, Math.ceil(3150 / 150), 'the watch on its own');
+  assert.equal(r.goals[2].by, '2028-06-18');
+  assert.equal(r.months, Math.ceil(6150 / 150), 'and the whole list');
+  assert.equal(r.by, '2030-02-18');
+  const stuck = sav({ monthly: null });
+  assert.equal(stuck.goals[2].months, null, 'nothing going in, so it is not arriving');
+  assert.equal(stuck.goals[2].stalled, true);
+  assert.equal(stuck.months, null);
+});
+
+test('a pot past the whole list reports spare, and nothing over 100 per cent', () => {
+  const r = sav({ balance: 10000 });
+  assert.equal(r.toGo, 0);
+  assert.equal(r.spare, 1400, '£10,000 against £8,600 of list');
+  assert.ok(r.goals.every(g => g.covered && g.pct === 1), 'all covered, none over full');
+  assert.equal(r.next, null, 'nothing out of reach');
+  assert.equal(r.affordable, 3);
+});
+
+test('savings cope with nothing set up', () => {
+  const empty = C.savingsCalc({}, [], '2026-09-18');
+  assert.deepEqual([empty.balance, empty.wanted, empty.toGo, empty.goals.length, empty.got.length], [0, 0, 0, 0, 0]);
+  assert.equal(empty.next, null);
+  const blank = C.savingsCalc({ balance: 100, goals: [{ name: '' }] }, [], '2026-09-18');
+  assert.equal(blank.goals[0].cost, 0);
+  assert.equal(blank.goals[0].covered, false, 'no price is not the same as free');
+  assert.equal(blank.goals[0].pct, null);
 });
 
 test('long-term debt is left out of the net unless asked for', () => {
-  const pots = [{ name: 'Watch', balance: 400, target: 5600, monthly: 100 }];
   const debts = [
-    { name: 'Lloyds Credit', type: 'Short-term', balance: 1850 },
-    { name: 'Sofa', type: 'Short-term', balance: 640 },
+    { name: 'Card', type: 'Short-term', balance: 1850 },
     { name: 'Mortgage', type: 'Long-term', balance: 197572.08 }
   ];
-  const without = C.potsCalc(pots, debts, '2026-09-18', false);
-  assert.equal(without.debtTotal, 2490, 'only what is actually being chipped away at');
-  assert.equal(without.longTotal, 197572.08, 'but the mortgage is still reported');
-  assert.equal(without.allTotal, 200062.08);
-  assert.equal(without.net, -2090);
+  const without = C.savingsCalc(SAV, debts, '2026-09-18', false);
+  assert.equal(without.longTotal, 197572.08);
+  assert.equal(without.allTotal, 199422.08);
+  assert.equal(without.debtTotal, 1850, 'only the card counts');
+  assert.equal(without.net, C.r2(2450 - 1850));
   assert.equal(without.withLong, false);
 
-  const withIt = C.potsCalc(pots, debts, '2026-09-18', true);
-  assert.equal(withIt.debtTotal, 200062.08);
-  assert.equal(withIt.net, -199662.08);
+  const withIt = C.savingsCalc(SAV, debts, '2026-09-18', true);
+  assert.equal(withIt.debtTotal, 199422.08);
+  assert.equal(withIt.net, C.r2(2450 - 199422.08));
   assert.equal(withIt.withLong, true);
 });
 
-test('a debt with no type counts — only an explicit Long-term is set aside', () => {
-  assert.equal(C.potsCalc([], [{ balance: 500 }], '2026-09-18', false).debtTotal, 500);
-  assert.equal(C.potsCalc([], [{ balance: 500, type: 'Short-term' }], '2026-09-18', false).debtTotal, 500);
-  assert.equal(C.potsCalc([], [{ balance: 500, type: 'Long-term' }], '2026-09-18', false).debtTotal, 0);
+test('a debt with no type counts \u2014 only an explicit Long-term is set aside', () => {
+  assert.equal(C.savingsCalc({}, [{ balance: 500 }], '2026-09-18', false).debtTotal, 500);
+  assert.equal(C.savingsCalc({}, [{ balance: 500, type: 'Short-term' }], '2026-09-18', false).debtTotal, 500);
+  assert.equal(C.savingsCalc({}, [{ balance: 500, type: 'Long-term' }], '2026-09-18', false).debtTotal, 0);
 });
 
 test('with no long-term debt the two settings agree', () => {
   const debts = [{ type: 'Short-term', balance: 1850 }];
-  assert.equal(C.potsCalc([], debts, '2026-09-18', false).net, C.potsCalc([], debts, '2026-09-18', true).net);
-  assert.equal(C.potsCalc([], debts, '2026-09-18', false).longTotal, 0);
+  assert.equal(C.savingsCalc({}, debts, '2026-09-18', false).net, C.savingsCalc({}, debts, '2026-09-18', true).net);
+  assert.equal(C.savingsCalc({}, debts, '2026-09-18', false).longTotal, 0);
 });
 
 /* ------------------------------------------------- NI thresholds & taper -- */

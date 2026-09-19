@@ -4,15 +4,26 @@ function ledgerRow(e, runningBal, gone) {
     <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
     <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
 }
-function potRow(p) {
-  return `<div class="prow"><div><b>${esc(p.name || 'Pot')}</b>
-      <small class="meta">${p.target
-        ? (p.done ? 'target of ' + C.gbp(p.target, 0) + ' reached'
-          : C.gbp(p.toGo) + ' to go of ' + C.gbp(p.target, 0)
-            + (p.by ? ' · there by ' + esc(C.fmtM(C.mkey(p.by))) : p.stalled ? ' · nothing going in' : ''))
-        : (p.monthly ? C.gbp(p.monthly) + ' a month, no target set' : 'no target set')}</small></div>
-    <div class="num tr"><b>${C.gbp(p.balance)}</b>${p.target ? `<div class="muted small">${C.pct(p.pct)}</div>` : ''}</div>
-    ${p.target ? `<div class="pb">${bar(p.pct, p.done ? '' : 'teal')}</div>` : ''}</div>`;
+/* One thing being saved for, measured against the whole pot. `actions` adds the
+   Got it button: Money gets it, Home does not, since the dashboard is for
+   reading and money is moved where the savings live. */
+function goalRow(g, actions) {
+  return `<div class="prow"><div><b>${esc(g.name || 'Something')}</b>
+      <small class="meta">${g.cost
+        ? (g.covered ? 'you have enough for this'
+          : C.gbp(g.short) + ' short'
+            + (g.by ? ' · there by ' + esc(C.fmtM(C.mkey(g.by))) : g.stalled ? ' · nothing going in' : ''))
+        : 'no price on it yet'}</small></div>
+    <div class="num tr"><b>${C.gbp(g.cost)}</b>${g.pct !== null ? `<div class="muted small">${C.pct(g.pct)}</div>` : ''}</div>
+    ${g.pct !== null ? `<div class="pb">${bar(g.pct, g.covered ? '' : 'teal')}</div>` : ''}
+    ${actions === true ? `<div class="potact">
+      <button class="btn ${g.covered ? 'teal' : 'ghost'} sm" data-act="goalGot" data-id="${esc(g.id)}">Got it</button></div>` : ''}</div>`;
+}
+/* Something already bought, and what actually came out of the pot for it. */
+function gotRow(g) {
+  return `<div class="row"><div class="l"><b>${esc(g.name || 'Something')}</b>
+      <small>got ${esc(C.fmtD(g.got))}${g.paid && g.cost && C.r2(g.paid) !== C.r2(g.cost) ? ' · listed at ' + C.gbp(g.cost, 0) : ''}</small></div>
+    <div class="num tr">${C.gbp(g.paid)}<button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div></div>`;
 }
 /* ---- the Pay tab, in pieces ---- */
 const resRow = (l, v, cls = '') => `<div class="r ${cls}"><span>${esc(l)}</span><span class="num">${v}</span></div>`;
@@ -103,7 +114,7 @@ function spendCard(sp, fl) {
 }
 function aboutCard() {
   const m = S.money;
-  const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [m.pots.length, 'pot'], [m.debts.length, 'debt'],
+  const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [(m.savings.goals || []).length, 'saving goal'], [m.debts.length, 'debt'],
     [S.house.length, 'house job'], [S.classic.length + S.mega.length, 'card'], [S.psm.length, 'magazine'], [S.games.length, 'game']]
     .filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`).join(' · ');
   return `<div class="card"><h2>About</h2>

@@ -93,8 +93,47 @@ document.addEventListener('click', async e => {
   if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit('adding a bill'); return; }
   if (a === 'delBill') { const b = S.money.bills[+d.i]; if (await confirmDlg('Remove this bill?', esc(b.name || ''))) { drop(S.money.bills, b); removed(b.name || 'a bill'); } return; }
   if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(`adding ${C.fmtM(k)}`); toast('Added ' + C.fmtM(k)); } return; }
-  if (a === 'addPot') { S.money.pots.push({ id: uid(), name: '', balance: null, target: null, monthly: null }); ui.editPots = true; commit('adding a pot'); return; }
-  if (a === 'delPot') { const p = S.money.pots[+d.i]; if (await confirmDlg('Remove this pot?', esc(p.name || ''))) { drop(S.money.pots, p); removed(p.name || 'a pot'); } return; }
+  /* Money in and out of the pot as it happens: the amount moved, not a new
+     total. Typing the total again is how you lose track of what went in. */
+  if (a === 'savMove') {
+    const sv = S.money.savings, up = +d.d > 0;
+    const v = await dialog({ title: up ? 'Add to savings' : 'Take out of savings',
+      body: `${C.gbp(C.num(sv.balance))} in the pot now. Type what you are moving.`,
+      ok: up ? 'Add' : 'Take out', input: '', inputType: 'number' });
+    if (v === null) return;
+    const amt = Math.abs(parseFloat(v));
+    if (!amt || isNaN(amt)) { toast('Type an amount first'); return; }
+    const was = C.num(sv.balance);
+    sv.balance = C.r2(up ? was + amt : Math.max(0, was - amt));   // the pot cannot hold less than nothing
+    const moved = C.r2(Math.abs(sv.balance - was));
+    commit(up ? 'adding to savings' : 'taking from savings');
+    toast(`${C.gbp(moved)} ${up ? 'into' : 'out of'} savings${!up && !sv.balance ? ', now empty' : ''}`, UNDO);
+    return;
+  }
+  /* Bought one of the things on the list: its price comes out of the pot and it
+     moves down to Already got. The figure is only a suggestion — what you
+     actually paid is what leaves. */
+  if (a === 'goalGot') {
+    const sv = S.money.savings, g = sv.goals.find(x => x.id === d.id);
+    if (!g) return;
+    const name = g.name || 'it';
+    const v = await dialog({ title: `Got ${esc(name)}?`,
+      body: `${C.gbp(C.num(sv.balance))} in the pot. Change the figure if you paid something else.`,
+      ok: 'Take it out', cancel: 'Not yet', input: C.num(g.cost) || '', inputType: 'number' });
+    if (v === null) return;
+    const amt = Math.abs(parseFloat(v));
+    if (isNaN(amt)) { toast('Type what you paid'); return; }
+    const was = C.num(sv.balance);
+    sv.balance = C.r2(Math.max(0, was - amt));
+    g.paid = C.r2(Math.min(amt, was));                   // what genuinely left the pot
+    g.got = C.today();
+    commit(`getting ${name}`);
+    toast(`${C.gbp(g.paid)} out for ${name}`, UNDO);
+    return;
+  }
+  if (a === 'addGoal') { S.money.savings.goals.push({ id: uid(), name: '', cost: null, got: null, paid: null }); ui.editGoals = true; commit('adding to the list'); return; }
+  if (a === 'delGoal') { const sv = S.money.savings, g = sv.goals.find(x => x.id === d.id);
+    if (g && await confirmDlg('Take this off the list?', esc(g.name || ''))) { drop(sv.goals, g); removed(g.name || 'it'); } return; }
   if (a === 'addDebt') { S.money.debts.push({ id: uid(), name: '', type: 'Short-term', balance: null, repayment: null, apr: null, notes: '' }); commit('adding a debt'); return; }
   if (a === 'delDebt') { const x = S.money.debts[+d.i]; if (await confirmDlg('Remove this debt?', esc(x.name || ''))) { drop(S.money.debts, x); removed(x.name || 'a debt'); } return; }
   if (a === 'addYear') { const Y = S.pay.taxYears, last = Y[Y.length - 1];

@@ -10,7 +10,7 @@ const $ = s => document.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 let S, storageOK = true, tab = 'home', theme = 'auto';
 const ui = { payday: null, openYears: {}, showAllMonths: false, editBills: false, editDebts: false, editFixed: false,
-  editJobs: false, editPots: false, moneyTab: 'now', showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
+  editJobs: false, editGoals: false, moneyTab: 'now', showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
 
 const TABS = [
   { k: 'home', l: 'Home', d: 'M3 10.6 12 3.4l9 7.2M5.6 9.4V20a1 1 0 0 0 1 1h10.8a1 1 0 0 0 1-1V9.4' },
@@ -121,7 +121,34 @@ function normalize() {
   ['house', 'classic', 'mega', 'psm', 'games'].forEach(k => arr(S, k));
   obj(S, 'money'); obj(S, 'pay');
   const m = S.money;
-  ['bills', 'months', 'debts', 'pots'].forEach(k => arr(m, k));
+  ['bills', 'months', 'debts'].forEach(k => arr(m, k));
+  /* Savings used to be several pots, each holding its own money. It is really
+     one balance with a shopping list against it, so the old pots are added up
+     into that balance and each becomes a thing being saved for. Runs once: an
+     older backup restored later is folded in the same way. */
+  if (!m.savings || typeof m.savings !== 'object' || Array.isArray(m.savings)) {
+    const old = Array.isArray(m.pots) ? m.pots : [];
+    const sum = k => old.reduce((a, p) => a + C.num(p[k]), 0);
+    m.savings = {
+      balance: old.length ? C.r2(sum('balance')) : null,
+      monthly: sum('monthly') ? C.r2(sum('monthly')) : null,
+      goals: old.map(p => ({ id: p.id || uid(), name: p.name || '',
+        cost: C.num(p.target) || C.num(p.balance) || null, got: null, paid: null }))
+        .filter(g => g.name || g.cost)
+    };
+  }
+  delete m.pots;
+  const sv = m.savings;
+  if (sv.balance === undefined) sv.balance = null;
+  if (sv.monthly === undefined) sv.monthly = null;
+  if (!Array.isArray(sv.goals)) sv.goals = [];
+  sv.goals = sv.goals.filter(g => g && typeof g === 'object');
+  sv.goals.forEach(g => {
+    if (!g.id) g.id = uid();
+    if (g.cost === undefined) g.cost = null;
+    if (g.got === undefined) g.got = null;
+    if (g.paid === undefined) g.paid = null;
+  });
   if (m.buffer === undefined) m.buffer = 0;
   if (m.overdraft === undefined) m.overdraft = 0;
   if (m.amex === undefined) m.amex = null;
@@ -139,7 +166,6 @@ function normalize() {
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
   m.bills.forEach(b => { if (!b.id) b.id = uid(); if (b.dueDay === undefined) b.dueDay = null; });
   m.debts.forEach(d => { if (!d.id) d.id = uid(); });
-  m.pots.forEach(p => { if (!p.id) p.id = uid(); });
   m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
      Unsorted rows make "latest month" and the chart wrong; duplicates double
@@ -261,7 +287,9 @@ function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = f
   return new Promise(resolve => {
     const d = $('#dlg'), f = $('#dlgForm');
     f.innerHTML = `<h3>${esc(title)}</h3>${body ? `<p>${body}</p>` : ''}
-      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${inputType === 'password' ? ' inputmode="numeric" class="pinin"' : ''}></div>` : ''}
+      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${
+        inputType === 'password' ? ' inputmode="numeric" class="pinin"'
+        : inputType === 'number' ? ' inputmode="decimal" step="any" class="amtin"' : ''}></div>` : ''}
       <div class="btnrow"><button class="btn ghost" value="cancel" type="submit">${esc(cancel)}</button>
       <button class="btn${danger ? ' danger' : ''}" value="ok" type="submit">${esc(ok)}</button></div>`;
     const done = () => {

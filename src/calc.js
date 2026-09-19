@@ -444,32 +444,46 @@ const C = (() => {
      A pot is a balance you have put aside, optionally with something you are
      saving towards and what you put in each month. Everything else follows from
      those three numbers, so nothing needs keeping in step by hand. */
-  function potsCalc(pots, debts, tod, withLong) {
+  /* One pot of money, and a list of what it is for.
+     Savings are not really separate piles — it is one balance, and the things
+     being saved for are a shopping list it has to stretch across. So every goal
+     is measured against the whole balance: what it costs, whether there is
+     enough for it yet, and how long until there is. Buying one takes its price
+     out of the pot and moves it to the got list. */
+  function savingsCalc(sav, debts, tod, withLong) {
+    sav = sav || {};
     tod = tod || today();
-    const list = (pots || []).map(p => {
-      const balance = num(p.balance), target = num(p.target), monthly = num(p.monthly);
-      const toGo = target ? r2(Math.max(target - balance, 0)) : null;
-      const months = (toGo && monthly > 0) ? Math.ceil(toGo / monthly) : null;
-      return { ...p, balance, target, monthly, toGo,
-        pct: target ? Math.min(balance / target, 1) : null,
-        done: !!target && balance >= target,
+    const balance = r2(num(sav.balance)), monthly = num(sav.monthly);
+    const all = (sav.goals || []).map(g => ({ ...g, cost: num(g.cost), paid: num(g.paid) }));
+    const got = all.filter(g => g.got).sort((a, b) => String(b.got).localeCompare(String(a.got)));
+    const goals = all.filter(g => !g.got).map(g => {
+      const short = r2(Math.max(g.cost - balance, 0));
+      const months = (short > 0 && monthly > 0) ? Math.ceil(short / monthly) : null;
+      return { ...g, short, covered: g.cost > 0 && balance >= g.cost,
+        pct: g.cost > 0 ? Math.min(balance / g.cost, 1) : null,
         months, by: months ? addMonths(tod, months) : null,
-        // a pot with a target but nothing going in is stuck where it is
-        stalled: !!target && balance < target && !monthly };
-    });
-    const total = r2(list.reduce((a, p) => a + p.balance, 0));
+        // nothing going in and not there yet: it is not arriving on its own
+        stalled: short > 0 && !monthly };
+    // what you could have next first, then whatever is closest to affordable
+    }).sort((a, b) => a.short - b.short || a.cost - b.cost);
+    const wanted = r2(goals.reduce((a, g) => a + g.cost, 0));
+    const toGo = r2(Math.max(wanted - balance, 0));
+    const allMonths = (toGo > 0 && monthly > 0) ? Math.ceil(toGo / monthly) : null;
     /* A mortgage dwarfs everything else and is not getting cleared this decade,
        so counting it turns the net figure into one big number that never moves.
        Long-term debt is opt-in; anything without a type counts, since only an
        explicit "Long-term" is being set aside. */
-    const all = debts || [];
-    const longTotal = r2(all.filter(d => d.type === 'Long-term').reduce((a, d) => a + num(d.balance), 0));
-    const allTotal = r2(all.reduce((a, d) => a + num(d.balance), 0));
+    const list = debts || [];
+    const longTotal = r2(list.filter(d => d.type === 'Long-term').reduce((a, d) => a + num(d.balance), 0));
+    const allTotal = r2(list.reduce((a, d) => a + num(d.balance), 0));
     const debtTotal = withLong ? allTotal : r2(allTotal - longTotal);
-    return { list, total, debtTotal, longTotal, allTotal, withLong: !!withLong, net: r2(total - debtTotal),
-      totalMonthly: r2(list.reduce((a, p) => a + p.monthly, 0)),
-      targeted: list.filter(p => p.target).length,
-      done: list.filter(p => p.done).length };
+    return { balance, monthly, goals, got, wanted, toGo,
+      spare: r2(balance - wanted),
+      months: allMonths, by: allMonths ? addMonths(tod, allMonths) : null,
+      next: goals.find(g => !g.covered) || null,
+      affordable: goals.filter(g => g.covered).length,
+      spent: r2(got.reduce((a, g) => a + (g.paid || g.cost), 0)),
+      debtTotal, longTotal, allTotal, withLong: !!withLong, net: r2(balance - debtTotal) };
   }
 
   /* ---------- bill price history ----------
@@ -574,6 +588,6 @@ const C = (() => {
 
   return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, priceHistory, potsCalc, spendLog, collections, gamesStats, MON, DOW };
+    payCalc, moneyCalc, debtPayoff, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 
