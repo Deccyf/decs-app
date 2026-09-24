@@ -366,7 +366,7 @@ const VIEWS = {
       Repayment dates come from the bill that funds them where there is one, otherwise the same day each month.
       Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
     }
-    return { title: 'Money', chart: sec === 'history' ? m.last12 : null, sub: fl.hasBal ? C.gbp(fl.safe, 0) + ' free · ' + fl.days + ' days to pay day' : (m.latest ? 'latest: ' + C.fmtM(m.latest.month) : ''), html: h };
+    return { title: 'Money', chart: sec === 'history' ? m.last12 : null, sub: fl.hasBal ? C.gbp(fl.safe, 0) + ' free · ' + (fl.days === 0 ? 'pay day today' : fl.days + ' day' + (fl.days === 1 ? '' : 's') + ' to pay day') : (m.latest ? 'latest: ' + C.fmtM(m.latest.month) : ''), html: h };
   },
 
   lists() {

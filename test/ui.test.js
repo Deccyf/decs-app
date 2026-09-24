@@ -1345,3 +1345,40 @@ test('a fixed rate running out asks for the new one', skip, async t => {
   await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(250);
   assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /fixed rate ended/);
 });
+
+test('on pay day the money is there from midnight, not the next morning', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [];
+  Object.assign(data.money, { balance: 400, balanceOn: '2026-09-20', buffer: 0, overdraft: 0, amex: null });
+  const free = p => p.$eval('.flowhero .amt', e => e.textContent);
+
+  const eve = await open(t, { on: '2026-09-24', data, tab: 'money' });
+  assert.equal(await free(eve), '£400.00', 'the night before, the pay is still to come');
+  assert.match(await eve.$eval('#sub', e => e.textContent), /1 day to pay day/);
+
+  const day = await open(t, { on: '2026-09-25', data, tab: 'money' });
+  assert.equal(await free(day), '£2,945.41', 'pay day itself, and it has landed');
+  assert.match(await day.$eval('#sub', e => e.textContent), /28 days to pay day/, 'counting to the next one');
+  assert.match(await day.$eval('#view', e => e.textContent), /Pay day has been since you typed this/,
+    'with the nudge to check the bank and retype it');
+
+  const after = await open(t, { on: '2026-09-26', data, tab: 'money' });
+  assert.equal(await free(after), '£2,945.41', 'the day after adds nothing new');
+});
+
+test('on pay day the board marks it paid and moves NEXT on', skip, async t => {
+  const page = await open(t, { on: '2026-09-25', data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'pay' });
+  const rows = await page.$$eval('.board .brow', rs => rs.map(r => ({
+    date: r.querySelector('.d').textContent.trim(), past: r.classList.contains('past'),
+    next: r.classList.contains('nextpd'), chip: !!r.querySelector('.tag') })));
+  const today = rows.find(r => /25 Sep 2026/.test(r.date));
+  assert.equal(today.past, true, 'today reads as paid');
+  assert.equal(today.next, false);
+  assert.equal(today.chip, false, 'and carries no NEXT chip');
+  const upcoming = rows.find(r => r.next);
+  assert.equal(upcoming.date, '23 Oct 2026', 'NEXT is the one four weeks out');
+  assert.equal(upcoming.chip, true);
+  assert.match(await page.$eval('#view .eyebrow', e => e.textContent), /Next pay day/);
+  assert.equal(await page.$eval('#view .payhead .big', e => e.textContent), '23 Oct 2026',
+    'and the payslip card is already showing the next one');
+});

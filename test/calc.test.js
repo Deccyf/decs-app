@@ -355,14 +355,45 @@ test('a balance typed today supersedes the same day\'s bills', () => {
   assert.equal(r.start, -43.08, 'not deducted a second time');
 });
 
-test('pay landing today stays in the pay row rather than the carry', () => {
+test('the pay day still being shown as coming is never also carried in', () => {
   const m = Object.assign(bills({ id: '1', name: 'Rent', amount: 100, dueDay: 1, started: '2024-01' }),
     { buffer: 0, balance: 500, balanceOn: '2026-09-20' });
+  // a schedule that still calls today the next pay day: the pay row wins, or it is counted twice
   const p = { nextPayDay: '2026-09-25', nextIdx: 0, rows: [{ payday: '2026-09-25', net: 2000 }] };
-  const r = C.runway(m, p, OPT, '2026-09-25');          // today IS pay day
+  const r = C.runway(m, p, OPT, '2026-09-25');
   assert.equal(r.carriedIn, 0, 'not counted twice');
   assert.equal(r.net, 2000);
   assert.equal(r.afterPay, C.r2(r.atPayday + 2000));
+});
+
+test('pay day updates the balance on the day, not the day after', () => {
+  const m = Object.assign(bills(), { buffer: 0, balance: 400, balanceOn: '2026-09-20' });
+  const on = tod => C.runway(m, C.payCalc(pay(), tod), OPT, tod);
+
+  const before = on('2026-09-24');
+  assert.equal(before.carriedIn, 0, 'nothing has landed the day before');
+  assert.equal(before.start, 400);
+  assert.equal(before.to, '2026-09-25');
+
+  const day = on('2026-09-25');                          // pay day itself
+  assert.equal(day.carriedIn, 2545.41, 'BACS lands in the small hours, so it is in');
+  assert.equal(day.start, 2945.41, 'and the balance says so from midnight');
+  assert.equal(day.to, '2026-10-23', 'with the runway now to the next one');
+  assert.equal(day.days, 28);
+  assert.equal(day.paydayPassed, true, 'which is also the cue to check the bank and retype it');
+
+  const after = on('2026-09-26');
+  assert.equal(after.start, day.start, 'the day after changes nothing but the days left');
+  assert.equal(after.days, 27);
+});
+
+test('a pay day that has been reads as paid, and the next one moves on', () => {
+  const r = C.payCalc(pay(), '2026-09-25');
+  assert.equal(r.nextPayDay, '2026-10-23');
+  const today = r.rows.find(x => x.payday === '2026-09-25');
+  assert.equal(today.past, true, 'today is paid, not still to come');
+  assert.equal(today.next, false);
+  assert.equal(r.rows[r.nextIdx].payday, '2026-10-23', 'and NEXT points at the one four weeks out');
 });
 
 /* ------------------------------------------------------------- overdraft -- */

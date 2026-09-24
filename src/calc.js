@@ -164,10 +164,13 @@ const C = (() => {
     const paye = x => taxOn(x, 4, nowRates);
     const ni = x => niOn(x, nowRates);
     const ped = num(p.periodEndDays);
-    // the stored pay day is an anchor — roll it on in 28-day steps so the schedule never goes stale
+    /* The stored pay day is an anchor — roll it on in 28-day steps so the
+       schedule never goes stale. Pay day itself counts as gone: BACS credits
+       land in the small hours, so by the time anyone opens this the money is in
+       and the pay day worth showing is the one four weeks out. */
     let next = p.nextPayDay;
-    while (next < tod) next = addDays(next, 28);
-    while (addDays(next, -28) >= tod) next = addDays(next, -28);
+    while (next <= tod) next = addDays(next, 28);
+    while (addDays(next, -28) > tod) next = addDays(next, -28);
     // schedule spans this year plus the next four; last year is kept only while its EU holiday pay
     // is still an estimate — once you record what you were paid, that year drops off
     const prevYear = +tod.slice(0, 4) - 1;
@@ -190,7 +193,7 @@ const C = (() => {
       rows.push({ payday, start, end, ot, sun, otPay, sunPay, basic: rowBasic, hourly: rowHourly, salary: sal,
         allow: fix.allow, sacr: fix.sacr, after: fix.after,
         refYear: end.slice(0, 4), taxYear: aprilStart(payday), rates: ratesOn(payday), hpaPay: 0, backpay: 0, backpayOt: 0,
-        past: payday < tod, next: payday === next });
+        past: payday <= tod, next: payday === next });
     }
     // backpay: for a rise with a backpay date, the shortfall on every period between the effective date and that pay day
     const riseCalc = rises.map(r => {
@@ -449,7 +452,13 @@ const C = (() => {
     const typedOn = hasBal && m.balanceOn && m.balanceOn < tod ? m.balanceOn : null;
     const carried = typedOn ? billEvents(m, addDays(typedOn, 1), tod, opt) : [];
     const carriedOut = r2(carried.reduce((a, e) => a + e.amount, 0));
-    const carriedPays = typedOn ? p.rows.filter(r => r.payday > typedOn && r.payday < tod) : [];
+    /* Pay dated today has landed, the same way a direct debit dated today has
+       gone. Counting it as still to come left pay day reading like the day
+       before it, with the money only turning up once the date rolled again.
+       The one pay day never carried is the one still being shown as coming:
+       payCalc rolls past today, so the two can only meet if a caller hands in a
+       schedule of its own, and then the pay row wins. */
+    const carriedPays = typedOn ? p.rows.filter(r => r.payday > typedOn && r.payday <= tod && r.payday < to) : [];
     const carriedIn = r2(carriedPays.reduce((a, r) => a + num(r.net), 0));
     const start = hasBal ? r2(typed - carriedOut + carriedIn) : null;
     const days = Math.max(daysBetween(tod, to), 0);
