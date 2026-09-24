@@ -895,3 +895,28 @@ test('a pay day still to come can take its payslip early', () => {
   assert.equal(r.past, false, 'months away');
   assert.equal(r.net, 3100, 'and still honoured');
 });
+
+test('the app asks for the payslip around pay day, then stops', () => {
+  const asks = (tod, extra) => {
+    const n = C.payCalc(pay(extra), tod).needsPayslip;
+    return n ? n.payday + (n.past ? ' gone' : ' coming') : null;
+  };
+  assert.equal(asks('2026-09-20'), null, 'five days out is too early to have it');
+  assert.equal(asks('2026-09-21'), '2026-09-25 coming', 'four days out, the default lead');
+  assert.equal(asks('2026-09-24'), '2026-09-25 coming');
+  assert.equal(asks('2026-09-25'), '2026-09-25 gone', 'pay day itself');
+  assert.equal(asks('2026-09-28'), '2026-09-25 gone', 'and a few days after, if it was missed');
+  assert.equal(asks('2026-09-29'), null, 'then it lets go rather than becoming wallpaper');
+
+  assert.equal(asks('2026-09-24', { actual: { '2026-09-25': 2563.09 } }), null, 'quiet once the figure is in');
+  assert.equal(asks('2026-09-19', { payslipLead: 7 }), '2026-09-25 coming', 'the lead is yours to set');
+  assert.equal(asks('2026-09-24', { payslipLead: 0 }), null, 'set it to nought and it only asks after');
+});
+
+test('it asks about one pay day at a time, the nearest one', () => {
+  // nothing typed all year, but only the pay day in hand is asked about
+  const p = C.payCalc(pay(), '2026-09-25');
+  assert.equal(p.rows.filter(r => r.actual === null).length > 10, true, 'plenty without a figure');
+  assert.equal(p.needsPayslip.payday, '2026-09-25');
+  assert.equal(C.payCalc(pay(), '2026-10-21').needsPayslip.payday, '2026-10-23', 'then the next one');
+});

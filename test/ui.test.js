@@ -1433,3 +1433,40 @@ test('a pay day off a payslip is marked as such on the board', skip, async t => 
     .find(x => /23 Oct 2026/.test(x));
   assert.doesNotMatch(other, /off your payslip/, 'the ones still projected are not');
 });
+
+test('Home reminds you to put the payslip figure in, and lands you on it', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  const page = await open(t, { on: '2026-09-22', data });                // three days before pay day
+  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25 Sep should be out/);
+  assert.match(await page.$eval('#view', e => e.textContent), /Pay day is in 3 days/);
+
+  await page.click('.attnrow:has-text("Payslip for 25 Sep")'); await page.waitForTimeout(350);
+  assert.equal(await page.$eval('#title', e => e.textContent), 'Pay', 'straight to the Pay tab');
+  assert.equal(await page.$eval('#view .payhead .big', e => e.textContent), '25 Sep 2026',
+    'with that pay day already picked, so the box is right there');
+
+  await page.fill('[data-set="pay.actual.2026-09-25"]', '2563.09');
+  await page.dispatchEvent('[data-set="pay.actual.2026-09-25"]', 'change');
+  await page.waitForTimeout(350);
+  await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(300);
+  assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /Payslip for/, 'and the reminder goes');
+});
+
+test('the reminder covers a pay day that went by without one', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  const page = await open(t, { on: '2026-09-27', data });                // two days after pay day
+  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25 Sep\./);
+  assert.match(await page.$eval('#view', e => e.textContent), /Paid 2 days ago and still on the projection/);
+
+  const gone = await open(t, { on: '2026-10-05', data });                // well past it
+  assert.doesNotMatch(await gone.$eval('#view', e => e.textContent), /Payslip for/, 'it does not nag forever');
+});
+
+test('how early the payslip lands is a setting', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.payslipLead = 7;
+  const page = await open(t, { on: '2026-09-19', data });                // six days out
+  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25 Sep should be out/);
+  await page.click('.tabs button[data-tab="pay"]'); await page.waitForTimeout(300);
+  assert.equal(await page.$eval('[data-set="pay.payslipLead"]', e => e.value), '7', 'and it is editable');
+});

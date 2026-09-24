@@ -196,6 +196,7 @@ function normalize() {
   ['hours', 'hpaHistory', 'tax', 'actual'].forEach(k => obj(P, k));
   if (!P.nextPayDay || !/^\d{4}-\d{2}-\d{2}$/.test(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
+  if (P.payslipLead === undefined || P.payslipLead === null || P.payslipLead === '') P.payslipLead = 4;
   if (!C.num(P.hoursWeek)) P.hoursWeek = 35;
   if (P.periodEndDays === undefined || P.periodEndDays === null) P.periodEndDays = 6;
   if (!P.taxYears.length) {

@@ -35,6 +35,7 @@
     "sundayRate": 3.7,
     "nextPayDay": "2026-08-28",
     "periodEndDays": 6,
+    "payslipLead": 4,
     "personalAllowance": 12570,
     "taxCode": "1257L",
     "fixed": [],

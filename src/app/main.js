@@ -67,7 +67,9 @@ document.addEventListener('click', async e => {
   const t = e.target.closest('[data-act]'); if (!t) return;
   const a = t.dataset.act, d = t.dataset;
   if (!S && a !== 'forgotPin') return;                 // still locked; nothing to act on
-  if (a === 'tab') { tab = d.tab; if (d.sec) ui.moneyTab = d.sec; render(false); return; }
+  if (a === 'tab') { tab = d.tab; if (d.sec) ui.moneyTab = d.sec;
+    if (d.payday) { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; }   // land on the one being asked about
+    render(false); return; }
   if (a === 'moneyTab') { ui.moneyTab = d.v; render(false); return; }
   if (a === 'theme') { setTheme(d.v); return; }
   if (a === 'pick') { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; render(false); return; }

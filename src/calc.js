@@ -265,6 +265,20 @@ const C = (() => {
       if (r.actual !== null) r.net = r.actual;
       r.diff = r.actual === null ? null : r2(r.actual - r.projected);
     });
+    /* The payslip turns up a few days before the money does, so there is a
+       window where the real figure is known and the projection is the worse of
+       the two. One pay day is asked about at a time: the one coming, once it is
+       inside that window, or the one just gone if it went by without a figure. */
+    // nought is a setting, not a blank: it means only ask once pay day has been
+    const leadSet = p.payslipLead;
+    const lead = leadSet === null || leadSet === undefined || leadSet === ''
+      ? 4 : Math.max(0, Math.round(num(leadSet)));
+    const wants = rows.filter(r => r.actual === null);
+    const needsPayslip = wants.find(r => !r.past && daysBetween(tod, r.payday) <= lead)
+      // a few days the other side too, for a pay day that went by without one,
+      // then it stops: a reminder that never goes away is just wallpaper
+      || wants.slice().reverse().find(r => r.past && daysBetween(r.payday, tod) <= 3)
+      || null;
     const thisTaxYear = aprilStart(tod);
     const yr = rows.filter(r => r.taxYear === thisTaxYear);
     const tot = k => yr.reduce((a, r) => a + num(r[k]), 0);
@@ -285,7 +299,8 @@ const C = (() => {
     const paCheck = { taxable: totals.taxable, allowance: paNow, should: r2(paShould),
       stale: totals.taxable > 100000 && paNow > paShould };
     let nextIdx = rows.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(rows.findIndex(r => !r.past), 0);
-    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
+    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
+      payslipLead: lead, needsPayslip, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
   /* ---------- money ---------- */

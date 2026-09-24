@@ -97,9 +97,18 @@ const VIEWS = {
     m.reviews.forEach(b => attn.push(['', `<b>${esc(b.name || 'A bill')} changes in ${esc(C.MON[b.review - 1])}.</b> Check the new amount — it is still down as ${C.gbp(b.amt)}.`, 'bills']));
     m.rateReviews.forEach(d => attn.push(['', `<b>${esc(d.name || 'A debt')}: fixed rate ended ${esc(C.fmtM(d.rateEnds))}.</b> The figures still assume ${C.rate(d.apr)}.`, 'saving']));
     m.noRateDebts.forEach(d => attn.push(['bad', `<b>${esc(d.name || 'A debt')} has no APR.</b> It is dropping by the full repayment with no interest — add the rate.`, 'saving']));
-    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest]) => {
-      const gear = dest === 'settings';
-      return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${gear ? 'settings' : 'money'}"${gear ? '' : ` data-sec="${esc(dest)}"`}><span>${text}</span><i aria-hidden="true">›</i></button>`;
+    if (p.needsPayslip) {
+      const n = p.needsPayslip, gone = n.past, away = gone ? C.daysBetween(n.payday, tod) : C.daysBetween(tod, n.payday);
+      attn.push(['', `<b>Payslip for ${esc(C.fmtDM(n.payday))}${gone ? '' : ' should be out'}.</b> ${
+        gone ? (away === 0 ? 'Paid today' : away === 1 ? 'Paid yesterday' : `Paid ${away} days ago`) + ' and still on the projection'
+          : `Pay day is in ${away} day${away === 1 ? '' : 's'}`} — type the net in and the figures use it.`, 'pay', n.payday]);
+    }
+    // a destination is either a tab of its own or a section of Money
+    const OWNTAB = { settings: 1, pay: 1 };
+    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest, payday]) => {
+      const t = OWNTAB[dest] ? dest : 'money';
+      return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${t}"${t === 'money' ? ` data-sec="${esc(dest)}"` : ''}${
+        payday ? ` data-payday="${esc(payday)}"` : ''}><span>${text}</span><i aria-hidden="true">›</i></button>`;
     }).join('')}</div>`;
 
     h += `<div class="tiles">
