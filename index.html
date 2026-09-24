@@ -242,7 +242,11 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .results .r.extra{background:var(--good-bg);color:var(--good);margin:8px -16px -16px;padding:12px 16px;border:0;
   border-radius:0 0 var(--r-lg) var(--r-lg);font-weight:700}
 .results .r.extra .muted{color:inherit;opacity:.75}
-.results .r.extra small{display:block;font-weight:600;font-size:12px;opacity:.8}
+/* a note under a figure sits on its own line and lines up with it, rather than
+   running straight on the end of the number */
+.results .r > span:last-child{text-align:right}
+.results .r small{display:block;font-weight:600;font-size:12px;margin-top:2px;color:var(--muted)}
+.results .r.extra small{color:inherit;opacity:.8}
 .tag{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.1em;padding:3px 7px;
   border-radius:var(--r-xs);background:var(--teal);color:#06231F;vertical-align:middle;margin-left:7px}
 
@@ -2125,14 +2129,15 @@ function payslipCard(r) {
         ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', '-' + C.gbp(r.paye))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
         ${resRow(r.actual !== null ? 'Net pay (your payslip)' : 'Net pay (projected)', C.gbp(r.net), 'total')}
         ${r.actual !== null ? resRow('Projected was', C.gbp(r.projected) + '<small>' + (
-          !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over it')) + '</small>') : ''}
-        ${resRow('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}
+          !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over the payslip')) + '</small>') : ''}
       </div>
-      <div class="grid2 mt10">${field('Net pay from your payslip', inp(`pay.actual.${r.payday}`, r.actual, 'number',
+      <div class="grid2 mt12">${field('Payslip net pay', inp(`pay.actual.${r.payday}`, r.actual, 'number',
         `placeholder="${r.projected.toFixed(2)}"`))}</div>
       <div class="note">Your payslip usually turns up a few days before the money does. Type the net off it and everything
         — the cash flow, what is free before the next pay day, the year's total — uses that instead of the projection.
-        The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div></div>`;
+        The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div>
+      ${/* last in the card on purpose: it bleeds to the edges and rounds off the bottom */ ''}
+      <div class="results">${resRow('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}</div></div>`;
 }
 /* Every pay day in the schedule, grouped by year; the selected one is highlighted */
 function payBoard(p, idx, r) {

@@ -1470,3 +1470,34 @@ test('how early the payslip lands is a setting', skip, async t => {
   await page.click('.tabs button[data-tab="pay"]'); await page.waitForTimeout(300);
   assert.equal(await page.$eval('[data-set="pay.payslipLead"]', e => e.value), '7', 'and it is editable');
 });
+
+test('the payslip card sits together properly', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.actual = { '2026-09-25': 2563.09 };
+  const page = await open(t, { on: '2026-09-22', data, tab: 'pay' });
+  const geo = await page.evaluate(() => {
+    const card = document.querySelector('#view .card'), cb = card.getBoundingClientRect();
+    const row = [...card.querySelectorAll('.results .r')].find(r => /Projected was/.test(r.textContent));
+    const note = row.querySelector('small').getBoundingClientRect();
+    const num = row.querySelector('.num').getBoundingClientRect();
+    const extra = card.querySelector('.r.extra').getBoundingClientRect();
+    const label = [...card.querySelectorAll('.field label')].find(l => /Payslip net pay/.test(l.textContent));
+    return {
+      noteTop: Math.round(note.top), numTop: Math.round(num.top),
+      noteRight: Math.round(note.right), numRight: Math.round(num.right),
+      cardBottom: Math.round(cb.bottom), cardLeft: Math.round(cb.left), cardRight: Math.round(cb.right),
+      extraBottom: Math.round(extra.bottom), extraLeft: Math.round(extra.left), extraRight: Math.round(extra.right),
+      labelHeight: Math.round(label.getBoundingClientRect().height),
+      lastChild: card.lastElementChild.contains(card.querySelector('.r.extra'))
+    };
+  });
+  // the difference belongs under the figure, not run on the end of it
+  assert.ok(geo.noteTop > geo.numTop, 'the note is on its own line');
+  assert.equal(geo.noteRight, geo.numRight, 'and lines up with the figure above it');
+  // the green block rounds off the card, so it has to stay the last thing in it
+  assert.equal(geo.lastChild, true);
+  assert.equal(geo.cardBottom - geo.extraBottom, 1, 'flush to the bottom, inside the card border');
+  assert.equal(geo.extraLeft - geo.cardLeft, 1, 'and bleeding to both edges');
+  assert.equal(geo.cardRight - geo.extraRight, 1);
+  assert.ok(geo.labelHeight < 24, `the field label fits one line (${geo.labelHeight}px)`);
+});

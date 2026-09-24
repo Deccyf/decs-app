@@ -37,14 +37,15 @@ function payslipCard(r) {
         ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', '-' + C.gbp(r.paye))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
         ${resRow(r.actual !== null ? 'Net pay (your payslip)' : 'Net pay (projected)', C.gbp(r.net), 'total')}
         ${r.actual !== null ? resRow('Projected was', C.gbp(r.projected) + '<small>' + (
-          !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over it')) + '</small>') : ''}
-        ${resRow('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}
+          !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over the payslip')) + '</small>') : ''}
       </div>
-      <div class="grid2 mt10">${field('Net pay from your payslip', inp(`pay.actual.${r.payday}`, r.actual, 'number',
+      <div class="grid2 mt12">${field('Payslip net pay', inp(`pay.actual.${r.payday}`, r.actual, 'number',
         `placeholder="${r.projected.toFixed(2)}"`))}</div>
       <div class="note">Your payslip usually turns up a few days before the money does. Type the net off it and everything
         — the cash flow, what is free before the next pay day, the year's total — uses that instead of the projection.
-        The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div></div>`;
+        The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div>
+      ${/* last in the card on purpose: it bleeds to the edges and rounds off the bottom */ ''}
+      <div class="results">${resRow('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}</div></div>`;
 }
 /* Every pay day in the schedule, grouped by year; the selected one is highlighted */
 function payBoard(p, idx, r) {
