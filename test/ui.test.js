@@ -1382,3 +1382,54 @@ test('on pay day the board marks it paid and moves NEXT on', skip, async t => {
   assert.equal(await page.$eval('#view .payhead .big', e => e.textContent), '23 Oct 2026',
     'and the payslip card is already showing the next one');
 });
+
+test('typing the net off your payslip takes over from the projection', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [];
+  Object.assign(data.money, { balance: 400, balanceOn: '2026-09-20', buffer: 0, overdraft: 0, amex: null });
+  const page = await open(t, { on: '2026-09-22', data, tab: 'pay' });   // payslip in hand, three days early
+  const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
+    .find(c => c.includes('Net pay'));
+
+  assert.match(await card(), /Net pay \(projected\).*£2,545\.41/);
+  assert.equal(await page.$eval('[data-set="pay.actual.2026-09-25"]', e => e.placeholder), '2545.41',
+    'the projection is the placeholder, so you can see what it reckoned');
+
+  await page.fill('[data-set="pay.actual.2026-09-25"]', '2563.09');
+  await page.dispatchEvent('[data-set="pay.actual.2026-09-25"]', 'change');
+  await page.waitForTimeout(350);
+  assert.equal(await stored(page).then(s => s.pay.actual['2026-09-25']), 2563.09);
+  let c = await card();
+  assert.match(c, /Net pay \(your payslip\).*£2,563\.09/);
+  assert.match(c, /Projected was.*£2,545\.41.*£17\.68 under the payslip/);
+  assert.match(c, /Basic pay£3,159\.10/, 'the breakdown is left as it was worked out');
+  assert.match(c, /PAYE-£438\.40/, 'tax and NI still explain the projection');
+  assert.match(await page.$eval('#view', e => e.textContent), /1 pay day came off a payslip/);
+
+  // it is what the cash flow spends, before the money has even landed
+  await page.click('.tabs button[data-tab="money"]'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('#view', e => e.textContent), /£2,563\.09/, 'shown as the pay still to come');
+  await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('.tiles', e => e.textContent), /£2,563/, 'and on the Next pay day tile');
+
+  // clearing it hands the pay day back to the projection
+  await page.click('.tabs button[data-tab="pay"]'); await page.waitForTimeout(300);
+  await page.fill('[data-set="pay.actual.2026-09-25"]', '');
+  await page.dispatchEvent('[data-set="pay.actual.2026-09-25"]', 'change');
+  await page.waitForTimeout(350);
+  assert.equal(await stored(page).then(s => s.pay.actual['2026-09-25']), null);
+  assert.match(await card(), /Net pay \(projected\).*£2,545\.41/);
+});
+
+test('a pay day off a payslip is marked as such on the board', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.actual = { '2026-09-25': 2563.09 };
+  const page = await open(t, { on: '2026-09-22', data, tab: 'pay' });
+  const row = (await page.$$eval('.board .brow', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim())))
+    .find(x => /25 Sep 2026/.test(x));
+  assert.match(row, /off your payslip/, 'so a real figure is never mistaken for a guess');
+  assert.match(row, /£2,563/);
+  const other = (await page.$$eval('.board .brow', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim())))
+    .find(x => /23 Oct 2026/.test(x));
+  assert.doesNotMatch(other, /off your payslip/, 'the ones still projected are not');
+});

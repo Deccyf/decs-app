@@ -254,12 +254,27 @@ const C = (() => {
         net: taxable - tax - nic - r.after,
         extra: extraGross ? extraGross - marginal - (nic - niOn(taxable - extraGross, e)) : 0 });
       r.keep = extraGross ? r.extra / extraGross : null;
+      /* A payslip beats a projection. The breakdown above stays exactly as it
+         was worked out, because that is what explains the figure, but once the
+         real net is typed in it is the one everything downstream spends. The
+         payslip lands a few days early, so this works for a pay day that has
+         not happened yet as readily as one that has. */
+      const typed = (p.actual || {})[r.payday];
+      r.projected = r.net;                             // kept unrounded, exactly as net has always been
+      r.actual = typed === null || typed === undefined || typed === '' ? null : r2(num(typed));
+      if (r.actual !== null) r.net = r.actual;
+      r.diff = r.actual === null ? null : r2(r.actual - r.projected);
     });
     const thisTaxYear = aprilStart(tod);
     const yr = rows.filter(r => r.taxYear === thisTaxYear);
     const tot = k => yr.reduce((a, r) => a + num(r[k]), 0);
     const totals = { ot: tot('ot'), sun: tot('sun'), otPay: tot('otPay'), sunPay: tot('sunPay'), hpaPay: tot('hpaPay'), backpay: tot('backpay'), taxable: tot('taxable'), paye: tot('paye'), ni: tot('ni'), net: tot('net'), extra: tot('extra'), extraGross: tot('extraGross') };
     totals.keep = totals.extraGross ? totals.extra / totals.extraGross : null;
+    // how the projection has been doing against the payslips that replaced it
+    totals.projected = tot('projected');
+    totals.actuals = yr.filter(r => r.actual !== null).length;
+    // taken off the totals rather than summing the rounded per-row differences
+    totals.diff = r2(tot('net') - tot('projected'));
     /* Above £100,000 HMRC takes £1 of personal allowance away for every £2
        earned over it, and issues a smaller tax code to collect it. Payroll does
        not work the taper out — it just applies whatever code it is given, and

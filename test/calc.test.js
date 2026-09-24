@@ -836,3 +836,62 @@ test('a fixed rate running out is flagged the month it does', () => {
   assert.deepEqual(C.moneyCalc({ bills: [], debts: [{ ...mtg, rateEnds: null }], months: [] }, '2027-09-01', OPT).rateReviews,
     [], 'a debt with no fixed term is never asked about');
 });
+
+/* --------------------------------------------------- the payslip figure -- */
+test('a typed payslip net replaces the projection everywhere it is spent', () => {
+  const proj = C.payCalc(pay(), '2026-09-22').rows.find(r => r.payday === '2026-09-25');
+  assert.equal(proj.actual, null);
+  assert.equal(proj.net, proj.projected, 'with nothing typed the two are the same');
+
+  const p = C.payCalc(pay({ actual: { '2026-09-25': 2563.09 } }), '2026-09-22');
+  const r = p.rows.find(x => x.payday === '2026-09-25');
+  assert.equal(r.actual, 2563.09);
+  assert.equal(r.net, 2563.09, 'the payslip is what gets spent');
+  assert.equal(r.projected, proj.net, 'the projection is kept to compare against');
+  assert.equal(r.diff, C.r2(2563.09 - proj.net));
+
+  // the breakdown is what explains the number, so it is left exactly as worked out
+  assert.equal(r.taxable, proj.taxable);
+  assert.equal(r.paye, proj.paye);
+  assert.equal(r.ni, proj.ni);
+
+  // and it reaches the cash flow, three days before the money does
+  const m = Object.assign(bills(), { buffer: 0, balance: 400, balanceOn: '2026-09-20' });
+  assert.equal(C.runway(m, p, OPT, '2026-09-22').net, 2563.09, 'shown as the pay still to come');
+  const onDay = C.payCalc(pay({ actual: { '2026-09-25': 2563.09 } }), '2026-09-25');
+  assert.equal(C.runway(m, onDay, OPT, '2026-09-25').start, 2963.09, 'and carried into the balance on the day');
+});
+
+test('clearing the payslip figure goes back to the projection', () => {
+  const projected = C.payCalc(pay(), '2026-09-22').rows.find(r => r.payday === '2026-09-25').net;
+  [null, '', undefined].forEach(v => {
+    const r = C.payCalc(pay({ actual: { '2026-09-25': v } }), '2026-09-22').rows.find(x => x.payday === '2026-09-25');
+    assert.equal(r.actual, null, `${JSON.stringify(v)} is not a figure`);
+    assert.equal(r.net, projected);
+    assert.equal(r.diff, null);
+  });
+  const zero = C.payCalc(pay({ actual: { '2026-09-25': 0 } }), '2026-09-22').rows.find(x => x.payday === '2026-09-25');
+  assert.equal(zero.actual, 0, 'but nought is, for an unpaid month');
+  assert.equal(zero.net, 0);
+});
+
+test('the year keeps score of how the projection has done', () => {
+  const bare = C.payCalc(pay(), '2026-09-22');
+  assert.equal(bare.totals.actuals, 0);
+  assert.equal(bare.totals.diff, 0);
+
+  const p = C.payCalc(pay({ actual: { '2026-08-28': 2500, '2026-09-25': 2563.09 } }), '2026-09-22');
+  assert.equal(p.totals.actuals, 2, 'two pay days off a payslip');
+  const rows = p.rows.filter(r => r.actual !== null && r.taxYear === '2026-04-06');
+  const summed = C.r2(rows.reduce((a, r) => a + r.diff, 0));
+  assert.ok(Math.abs(p.totals.diff - summed) <= 0.01, `running difference ${p.totals.diff} against rows ${summed}`);
+  assert.equal(p.totals.diff, C.r2(p.totals.net - p.totals.projected), 'it is the gap between the two year totals');
+  assert.ok(p.totals.net !== p.totals.projected, 'which the payslips have moved');
+});
+
+test('a pay day still to come can take its payslip early', () => {
+  const p = C.payCalc(pay({ actual: { '2026-12-18': 3100 } }), '2026-09-22');
+  const r = p.rows.find(x => x.payday === '2026-12-18');
+  assert.equal(r.past, false, 'months away');
+  assert.equal(r.net, 3100, 'and still honoured');
+});

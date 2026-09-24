@@ -52,6 +52,14 @@ than a code change. The personal allowance is whatever the tax code says — the
 app does not work the £100k taper out, because payroll does not either, so it
 says when the code on file has clearly not been updated.
 
+A payslip beats a projection. `pay.actual` holds a real net against a pay day,
+and once one is typed it is what every downstream figure spends — the cash flow,
+the year's total, the Home tile — while the breakdown stays as it was worked out,
+because that is what explains the number. `projected` and `diff` are kept beside
+it so the two can be compared. Pay day itself counts as gone, not still to come:
+BACS lands in the small hours, so `payCalc` rolls past today and `runway` carries
+today's pay into the balance.
+
 **The cash flow.** `runway` answers one question: what is genuinely free to
 spend before the next pay day. The bank balance is typed with the date it was
 true (`balance` / `balanceOn`) and carried forward from there, with the bills

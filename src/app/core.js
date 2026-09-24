@@ -193,7 +193,7 @@ function normalize() {
   m.months = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
   const P = S.pay;
   ['fixed', 'rises', 'taxYears'].forEach(k => arr(P, k));
-  ['hours', 'hpaHistory', 'tax'].forEach(k => obj(P, k));
+  ['hours', 'hpaHistory', 'tax', 'actual'].forEach(k => obj(P, k));
   if (!P.nextPayDay || !/^\d{4}-\d{2}-\d{2}$/.test(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
   if (!C.num(P.hoursWeek)) P.hoursWeek = 35;

@@ -35,9 +35,16 @@ function payslipCard(r) {
         ${resRow('Basic pay', C.gbp(r.basic))}${r.allow ? resRow('Allowances', C.gbp(r.allow)) : ''}
         ${resRow('Overtime pay', C.gbp(r.otPay))}${resRow(SUN, C.gbp(r.sunPay))}${r.backpay ? resRow('Backpay (estimate)', C.gbp(r.backpay)) : ''}${r.hpaPay ? resRow('EU Holiday Pay' + (S.pay.hpaHistory[String(+r.refYear - 1)] != null && S.pay.hpaHistory[String(+r.refYear - 1)] !== '' ? '' : ' (estimate)'), C.gbp(r.hpaPay)) : ''}${r.sacr ? resRow('Salary sacrifice', '-' + C.gbp(r.sacr)) : ''}
         ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', '-' + C.gbp(r.paye))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
-        ${resRow('Net pay', C.gbp(r.net), 'total')}
+        ${resRow(r.actual !== null ? 'Net pay (your payslip)' : 'Net pay (projected)', C.gbp(r.net), 'total')}
+        ${r.actual !== null ? resRow('Projected was', C.gbp(r.projected) + '<small>' + (
+          !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over it')) + '</small>') : ''}
         ${resRow('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}
-      </div></div>`;
+      </div>
+      <div class="grid2 mt10">${field('Net pay from your payslip', inp(`pay.actual.${r.payday}`, r.actual, 'number',
+        `placeholder="${r.projected.toFixed(2)}"`))}</div>
+      <div class="note">Your payslip usually turns up a few days before the money does. Type the net off it and everything
+        — the cash flow, what is free before the next pay day, the year's total — uses that instead of the projection.
+        The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div></div>`;
 }
 /* Every pay day in the schedule, grouped by year; the selected one is highlighted */
 function payBoard(p, idx, r) {
@@ -52,12 +59,14 @@ function payBoard(p, idx, r) {
     if (!open) return head;
     return head + g.rows.map(({ x, i }) => `<button class="brow ${x.past ? 'past' : ''} ${x.next ? 'nextpd' : ''} ${i === idx ? 'sel' : ''}" data-act="pick" data-payday="${x.payday}"${i === idx ? ' aria-current="true"' : ''}>
       <span class="bl"><span class="d">${esc(C.fmtD(x.payday))}</span><span class="pr">${esc(C.fmtDM(x.start))} – ${esc(C.fmtDM(x.end))}</span>${x.next ? '<span class="tag">NEXT</span>' : ''}</span>
-      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
+      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.actual !== null ? '<span class="muted small">off your payslip</span>' : ''}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
       <span class="n">${C.gbp(x.net, 0)}${x.extraGross ? `<span class="muted small">+${C.gbp(x.extra, 0)}</span>` : ''}</span></button>`).join('');
   }).join('');
   return `<div class="card board"><h2>Pay days</h2><div class="muted small mb4">Tap a year to open or close it, then tap a pay day to log hours for it.</div>
     ${years}
     <div class="row mt8"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h overtime · ${p.totals.sun}h Sunday · ${C.gbp(p.totals.extraGross, 0)} gross extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
+    ${p.totals.actuals ? `<div class="note">${p.totals.actuals} pay day${p.totals.actuals === 1 ? '' : 's'} came off a payslip rather than the projection${
+      p.totals.diff ? `, and ${C.gbp(Math.abs(p.totals.diff))} ${p.totals.diff > 0 ? 'more' : 'less'} than projected across the year so far` : ', matching it exactly'}.</div>` : ''}
   </div>`;
 }
 function hpaCard(p) {

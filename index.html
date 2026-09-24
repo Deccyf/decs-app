@@ -781,12 +781,27 @@ const C = (() => {
         net: taxable - tax - nic - r.after,
         extra: extraGross ? extraGross - marginal - (nic - niOn(taxable - extraGross, e)) : 0 });
       r.keep = extraGross ? r.extra / extraGross : null;
+      /* A payslip beats a projection. The breakdown above stays exactly as it
+         was worked out, because that is what explains the figure, but once the
+         real net is typed in it is the one everything downstream spends. The
+         payslip lands a few days early, so this works for a pay day that has
+         not happened yet as readily as one that has. */
+      const typed = (p.actual || {})[r.payday];
+      r.projected = r.net;                             // kept unrounded, exactly as net has always been
+      r.actual = typed === null || typed === undefined || typed === '' ? null : r2(num(typed));
+      if (r.actual !== null) r.net = r.actual;
+      r.diff = r.actual === null ? null : r2(r.actual - r.projected);
     });
     const thisTaxYear = aprilStart(tod);
     const yr = rows.filter(r => r.taxYear === thisTaxYear);
     const tot = k => yr.reduce((a, r) => a + num(r[k]), 0);
     const totals = { ot: tot('ot'), sun: tot('sun'), otPay: tot('otPay'), sunPay: tot('sunPay'), hpaPay: tot('hpaPay'), backpay: tot('backpay'), taxable: tot('taxable'), paye: tot('paye'), ni: tot('ni'), net: tot('net'), extra: tot('extra'), extraGross: tot('extraGross') };
     totals.keep = totals.extraGross ? totals.extra / totals.extraGross : null;
+    // how the projection has been doing against the payslips that replaced it
+    totals.projected = tot('projected');
+    totals.actuals = yr.filter(r => r.actual !== null).length;
+    // taken off the totals rather than summing the rounded per-row differences
+    totals.diff = r2(tot('net') - tot('projected'));
     /* Above £100,000 HMRC takes £1 of personal allowance away for every £2
        earned over it, and issues a smaller tax code to collect it. Payroll does
        not work the taper out — it just applies whatever code it is given, and
@@ -1390,7 +1405,7 @@ function normalize() {
   m.months = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
   const P = S.pay;
   ['fixed', 'rises', 'taxYears'].forEach(k => arr(P, k));
-  ['hours', 'hpaHistory', 'tax'].forEach(k => obj(P, k));
+  ['hours', 'hpaHistory', 'tax', 'actual'].forEach(k => obj(P, k));
   if (!P.nextPayDay || !/^\d{4}-\d{2}-\d{2}$/.test(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
   if (!C.num(P.hoursWeek)) P.hoursWeek = 35;
@@ -2082,9 +2097,16 @@ function payslipCard(r) {
         ${resRow('Basic pay', C.gbp(r.basic))}${r.allow ? resRow('Allowances', C.gbp(r.allow)) : ''}
         ${resRow('Overtime pay', C.gbp(r.otPay))}${resRow(SUN, C.gbp(r.sunPay))}${r.backpay ? resRow('Backpay (estimate)', C.gbp(r.backpay)) : ''}${r.hpaPay ? resRow('EU Holiday Pay' + (S.pay.hpaHistory[String(+r.refYear - 1)] != null && S.pay.hpaHistory[String(+r.refYear - 1)] !== '' ? '' : ' (estimate)'), C.gbp(r.hpaPay)) : ''}${r.sacr ? resRow('Salary sacrifice', '-' + C.gbp(r.sacr)) : ''}
         ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', '-' + C.gbp(r.paye))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
-        ${resRow('Net pay', C.gbp(r.net), 'total')}
+        ${resRow(r.actual !== null ? 'Net pay (your payslip)' : 'Net pay (projected)', C.gbp(r.net), 'total')}
+        ${r.actual !== null ? resRow('Projected was', C.gbp(r.projected) + '<small>' + (
+          !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over it')) + '</small>') : ''}
         ${resRow('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}
-      </div></div>`;
+      </div>
+      <div class="grid2 mt10">${field('Net pay from your payslip', inp(`pay.actual.${r.payday}`, r.actual, 'number',
+        `placeholder="${r.projected.toFixed(2)}"`))}</div>
+      <div class="note">Your payslip usually turns up a few days before the money does. Type the net off it and everything
+        — the cash flow, what is free before the next pay day, the year's total — uses that instead of the projection.
+        The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div></div>`;
 }
 /* Every pay day in the schedule, grouped by year; the selected one is highlighted */
 function payBoard(p, idx, r) {
@@ -2099,12 +2121,14 @@ function payBoard(p, idx, r) {
     if (!open) return head;
     return head + g.rows.map(({ x, i }) => `<button class="brow ${x.past ? 'past' : ''} ${x.next ? 'nextpd' : ''} ${i === idx ? 'sel' : ''}" data-act="pick" data-payday="${x.payday}"${i === idx ? ' aria-current="true"' : ''}>
       <span class="bl"><span class="d">${esc(C.fmtD(x.payday))}</span><span class="pr">${esc(C.fmtDM(x.start))} – ${esc(C.fmtDM(x.end))}</span>${x.next ? '<span class="tag">NEXT</span>' : ''}</span>
-      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
+      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.actual !== null ? '<span class="muted small">off your payslip</span>' : ''}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
       <span class="n">${C.gbp(x.net, 0)}${x.extraGross ? `<span class="muted small">+${C.gbp(x.extra, 0)}</span>` : ''}</span></button>`).join('');
   }).join('');
   return `<div class="card board"><h2>Pay days</h2><div class="muted small mb4">Tap a year to open or close it, then tap a pay day to log hours for it.</div>
     ${years}
     <div class="row mt8"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h overtime · ${p.totals.sun}h Sunday · ${C.gbp(p.totals.extraGross, 0)} gross extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
+    ${p.totals.actuals ? `<div class="note">${p.totals.actuals} pay day${p.totals.actuals === 1 ? '' : 's'} came off a payslip rather than the projection${
+      p.totals.diff ? `, and ${C.gbp(Math.abs(p.totals.diff))} ${p.totals.diff > 0 ? 'more' : 'less'} than projected across the year so far` : ', matching it exactly'}.</div>` : ''}
   </div>`;
 }
 function hpaCard(p) {
