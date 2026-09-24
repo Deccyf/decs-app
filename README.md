@@ -12,7 +12,7 @@ src/
   page.html          the HTML skeleton, with <!--@css--> <!--@seed--> <!--@js--> placeholders
   styles.css         all styling; every colour is a token, so dark mode is a swap
   seed.json          the defaults a fresh install starts from
-  calc.js            pure functions, no DOM — pay, tax, bank holidays, cash flow, savings
+  calc.js            pure functions, no DOM — pay, tax, bank holidays, cash flow, savings, spending
   app/core.js        state, storage, PIN encryption, undo history, theme, dialogs, html helpers
   app/views.js       one function per tab, returning HTML strings
   app/components.js  pieces the views share
@@ -56,16 +56,21 @@ A payslip beats a projection. `pay.actual` holds a real net against a pay day,
 and once one is typed it is what every downstream figure spends — the cash flow,
 the year's total, the Home tile — while the breakdown stays as it was worked out,
 because that is what explains the number. `projected` and `diff` are kept beside
-it so the two can be compared. Pay day itself counts as gone, not still to come:
-BACS lands in the small hours, so `payCalc` rolls past today and `runway` carries
-today's pay into the balance.
+it so the two can be compared, and `totals.diff` says how far the projection has
+run from the payslips across the year. It works for a pay day that has not
+happened yet, which is the point: the payslip turns up first. `payslipLead` is
+how many days early, and `needsPayslip` is the one pay day worth asking about.
 
 **The cash flow.** `runway` answers one question: what is genuinely free to
 spend before the next pay day. The bank balance is typed with the date it was
 true (`balance` / `balanceOn`) and carried forward from there, with the bills
-due since coming off it. Bills landing on a weekend or bank holiday can shift to
-the next or previous working day (`shiftDue`, with Easter worked out rather than
-tabulated). An overdraft counts as spendable room; a buffer does not.
+due since coming off it. Pay day counts as gone rather than still to come, since
+BACS lands in the small hours: `payCalc` rolls past today and `runway` carries
+today's pay in, so the money is there from midnight rather than the next
+morning. The one pay day never carried is the one still being shown as coming.
+Bills landing on a weekend or bank holiday can shift to the next or previous
+working day (`shiftDue`, with Easter worked out rather than tabulated). An
+overdraft counts as spendable room; a buffer does not.
 
 **Bills.** A bill can have months off (`skip`, month numbers) for council tax
 over ten instalments or a gym frozen for winter, and a month it changes price
@@ -94,6 +99,29 @@ is appended to `money.balanceLog`, and `spendLog` takes each pair of readings,
 works out what the bills and pay should have done in between, and calls the
 remainder spending. Stretches touching a pay day are shown but kept out of the
 average, because the pay in them is this app's estimate rather than a payslip.
+
+## What it nudges about
+
+Home carries a "Needs a look" card, and it only exists when there is something
+in it. Every row is one tap to the place that deals with it. They are the main
+way the app says anything, so they are worth knowing as a set before adding
+another:
+
+- **The cash flow.** Short before pay day or into the overdraft; pay day has
+  been since the balance was typed; a balance a week old; a card due to clear in
+  the next few days.
+- **Bills.** One with no payment date, so it is missing from the cash flow; a
+  price that moved last month; a price due to change this month.
+- **Debts.** A fixed rate that has run out, so the figures still assume the old
+  one; a debt being carried with no APR, which flatters it badly.
+- **Pay.** The payslip figure, from a few days before pay day until a few days
+  after, then it lets go.
+- **The data itself.** No backup yet, or the last one over a month old.
+
+Each clears by dealing with it, or by saying once that nothing has changed — a
+bill price confirmed, a rate typed in. None of them can be swiped away on its
+own, because a reminder that can be dismissed without doing anything is a
+reminder that will be, and none of them nags forever either.
 
 ## The app layer
 
