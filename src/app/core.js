@@ -445,9 +445,24 @@ function unlockScreen(blob) {
 }
 
 /* ---------------- turning the PIN on, changing it, turning it off ---------------- */
-async function askPin(title, body, ok) {
-  const v = await dialog({ title, body, ok: ok || 'Continue', input: '', inputType: 'password' });
+async function askPin(title, body, ok, danger) {
+  const v = await dialog({ title, body, ok: ok || 'Continue', input: '', inputType: 'password', danger: !!danger });
   return v === null ? null : String(v).trim();
+}
+/* A phone picked up while it is unlocked should not be able to take the lock
+   off, or change it to a PIN its owner does not know — so both ask for the PIN
+   in use first. The key is the check: a byte sealed with the key in hand has
+   to open with the one the typed PIN makes. Nothing is stored to compare
+   against, so there is still nothing on the device to guess from. */
+async function pinMatches(pin) {
+  if (!pin || !cryptoKey || !cryptoSalt) return false;
+  toast('Checking…');
+  try {
+    const key = await deriveKey(pin, cryptoSalt, cryptoIters), iv = crypto.getRandomValues(new Uint8Array(12));
+    const probe = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new Uint8Array([1]));
+    await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, probe);
+    return true;
+  } catch (e) { return false; }
 }
 async function setPin() {
   if (!CRYPTO_OK) { toast('This browser cannot encrypt'); return; }
@@ -469,6 +484,9 @@ async function setPin() {
   toast('PIN lock on');
 }
 async function changePin() {
+  const now = await askPin('Your current PIN', 'Type the PIN you use now before choosing a new one.', 'Next');
+  if (now === null) return;
+  if (!(await pinMatches(now))) { toast("That isn't your current PIN — nothing changed"); return; }
   const one = await askPin('New PIN', 'Six digits or more.', 'Next');
   if (one === null) return;
   if (one.length < 6) { toast('Use at least 6 characters'); return; }
@@ -487,10 +505,11 @@ async function rekey(pin) {
   await save();
 }
 async function clearPin() {
-  const yes = await dialog({ title: 'Turn off the PIN lock?',
-    body: 'Your figures go back to being stored unencrypted on this device, readable by anyone who can unlock the phone.',
-    ok: 'Turn it off', danger: true });
-  if (!yes) return;
+  const now = await askPin('Turn off the PIN lock?',
+    'Your figures go back to being stored unencrypted on this device, readable by anyone who can unlock the phone. Type your PIN to turn it off.',
+    'Turn it off', true);
+  if (now === null) return;
+  if (!(await pinMatches(now))) { toast("That isn't your PIN — the lock stays on"); return; }
   cryptoKey = null; cryptoSalt = null;
   plainOK = true;                                    // this one save is allowed to go back to plain
   await save();

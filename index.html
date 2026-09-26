@@ -322,7 +322,7 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
   padding:2px 6px;border-radius:var(--r-xs);background:var(--warn-bg);color:var(--warn);margin-left:6px;vertical-align:1px}
 .moved.today{background:var(--good-bg);color:var(--good)}
 .perrow{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
-.perrow:last-child{border-bottom:0}
+.perrow:last-child,.perrow:not(:has(~ .perrow)){border-bottom:0}
 .perrow .pb{grid-column:1/-1}
 
 /* ===================================================================
@@ -332,7 +332,7 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .bar i{display:block;height:100%;background:var(--forest);border-radius:var(--r-full);transition:width .3s}
 .bar.teal i{background:var(--teal)}.bar.amber i{background:var(--amber)}.bar.coral i{background:var(--coral)}
 .prow{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:9px 0;border-bottom:1px solid var(--line);align-items:center}
-.prow:last-child{border-bottom:0}
+.prow:last-child,.prow:not(:has(~ .prow)){border-bottom:0}
 /* the bar and the buttons are grid items of .prow, so they are what has to span:
    a wrapped bar via .pb, a bare one (the category breakdown) directly */
 .prow .pb,.prow .potact,.prow > .bar{grid-column:1/-1}
@@ -362,19 +362,20 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .table th:first-child,.table td:first-child{text-align:left}
 .table tr:last-child td{border-bottom:0}
 .tscroll{overflow-x:auto;margin:0 -16px;padding:0 16px;-webkit-overflow-scrolling:touch}
-.mrow{padding:12px 0;border-bottom:1px solid var(--line)}.mrow:last-child{border-bottom:0}
+.mrow{padding:12px 0;border-bottom:1px solid var(--line)}.mrow:last-child,.mrow:not(:has(~ .mrow)){border-bottom:0}
 .mhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}
 .mhead b{font-size:15px}.mhead .disp{font-weight:800;font-variant-numeric:tabular-nums}
 .mgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .erow{display:grid;grid-template-columns:1fr 1fr;gap:9px;padding:12px 0;border-bottom:1px solid var(--line);align-items:end}
-.erow:last-of-type{border-bottom:0}
+.erow:not(:has(~ .erow)){border-bottom:0}
 .yearhead{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin:16px 0 2px}
 details{border-top:1px solid var(--line);margin-top:12px;padding-top:2px}
-details summary{cursor:pointer;font-weight:800;color:var(--ink);padding:12px 0;list-style:none;
+details summary{cursor:pointer;font-weight:800;color:var(--ink);padding:12px 0 8px;list-style:none;
   display:flex;justify-content:space-between;gap:10px;font-size:14.5px}
 details summary::-webkit-details-marker{display:none}
 details summary::after{content:"+";content:"+" / "";color:var(--muted);font-size:18px;line-height:1}
 details[open] summary::after{content:"–";content:"–" / ""}
+details>summary+.erow,details>summary+.empty{padding-top:6px}
 .banner{background:var(--warn-bg);color:var(--warn);border-radius:var(--r);padding:12px 14px;font-size:13px;
   margin:12px 0;line-height:1.5}
 .banner b{color:inherit}
@@ -461,6 +462,8 @@ dialog::backdrop{background:rgba(8,12,20,.55);backdrop-filter:blur(3px)}
 .locklink{border:0;background:none;color:var(--muted);font-size:13px;font-weight:600;
   text-decoration:underline;text-underline-offset:3px;cursor:pointer;padding:8px;margin-top:4px;min-height:var(--tap)}
 body.locked{overflow:hidden}
+/* covered while in the background with a PIN set, so the app switcher's picture shows nothing */
+body.veiled>*:not(#lock){visibility:hidden}
 body.locked header,body.locked main,body.locked .tabs{display:none}
 @media (prefers-reduced-motion:no-preference){
   main{animation:fade .2s ease-out}
@@ -570,11 +573,15 @@ const C = (() => {
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dow = s => i2d(s).getUTCDay();
-  const fmtD = s => { if (!s) return ''; const d = i2d(s); return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
-  const fmtDM = s => { const d = i2d(s); return `${String(d.getUTCDate()).padStart(2, '0')} ${MON[d.getUTCMonth()]}`; };
-  const fmtDow = s => `${DOW[dow(s)]} ${fmtDM(s)}`;
-  const fmtM = k => `${MON[+k.slice(5, 7) - 1]} ${k.slice(0, 4)}`;
-  const fmtMs = k => `${MON[+k.slice(5, 7) - 1]} ${k.slice(2, 4)}`;
+  /* The spaces inside a date are non-breaking, so "12 Mar 2027" wraps as a
+     whole rather than leaving "12" at the end of one line and "Mar 2027" on the
+     next. A regex \s still matches them. */
+  const NB = '\u00a0';
+  const fmtD = s => { if (!s) return ''; const d = i2d(s); return `${d.getUTCDate()}${NB}${MON[d.getUTCMonth()]}${NB}${d.getUTCFullYear()}`; };
+  const fmtDM = s => { const d = i2d(s); return `${String(d.getUTCDate()).padStart(2, '0')}${NB}${MON[d.getUTCMonth()]}`; };
+  const fmtDow = s => `${DOW[dow(s)]}${NB}${fmtDM(s)}`;
+  const fmtM = k => `${MON[+k.slice(5, 7) - 1]}${NB}${k.slice(0, 4)}`;
+  const fmtMs = k => `${MON[+k.slice(5, 7) - 1]}${NB}${k.slice(2, 4)}`;
   const ord = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
   // made once and kept: toLocaleString with options builds a new formatter for every figure on the page
   const nfs = {};
@@ -1822,9 +1829,24 @@ function unlockScreen(blob) {
 }
 
 /* ---------------- turning the PIN on, changing it, turning it off ---------------- */
-async function askPin(title, body, ok) {
-  const v = await dialog({ title, body, ok: ok || 'Continue', input: '', inputType: 'password' });
+async function askPin(title, body, ok, danger) {
+  const v = await dialog({ title, body, ok: ok || 'Continue', input: '', inputType: 'password', danger: !!danger });
   return v === null ? null : String(v).trim();
+}
+/* A phone picked up while it is unlocked should not be able to take the lock
+   off, or change it to a PIN its owner does not know — so both ask for the PIN
+   in use first. The key is the check: a byte sealed with the key in hand has
+   to open with the one the typed PIN makes. Nothing is stored to compare
+   against, so there is still nothing on the device to guess from. */
+async function pinMatches(pin) {
+  if (!pin || !cryptoKey || !cryptoSalt) return false;
+  toast('Checking…');
+  try {
+    const key = await deriveKey(pin, cryptoSalt, cryptoIters), iv = crypto.getRandomValues(new Uint8Array(12));
+    const probe = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new Uint8Array([1]));
+    await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, probe);
+    return true;
+  } catch (e) { return false; }
 }
 async function setPin() {
   if (!CRYPTO_OK) { toast('This browser cannot encrypt'); return; }
@@ -1846,6 +1868,9 @@ async function setPin() {
   toast('PIN lock on');
 }
 async function changePin() {
+  const now = await askPin('Your current PIN', 'Type the PIN you use now before choosing a new one.', 'Next');
+  if (now === null) return;
+  if (!(await pinMatches(now))) { toast("That isn't your current PIN — nothing changed"); return; }
   const one = await askPin('New PIN', 'Six digits or more.', 'Next');
   if (one === null) return;
   if (one.length < 6) { toast('Use at least 6 characters'); return; }
@@ -1864,10 +1889,11 @@ async function rekey(pin) {
   await save();
 }
 async function clearPin() {
-  const yes = await dialog({ title: 'Turn off the PIN lock?',
-    body: 'Your figures go back to being stored unencrypted on this device, readable by anyone who can unlock the phone.',
-    ok: 'Turn it off', danger: true });
-  if (!yes) return;
+  const now = await askPin('Turn off the PIN lock?',
+    'Your figures go back to being stored unencrypted on this device, readable by anyone who can unlock the phone. Type your PIN to turn it off.',
+    'Turn it off', true);
+  if (now === null) return;
+  if (!(await pinMatches(now))) { toast("That isn't your PIN — the lock stays on"); return; }
   cryptoKey = null; cryptoSalt = null;
   plainOK = true;                                    // this one save is allowed to go back to plain
   await save();
@@ -2088,7 +2114,7 @@ const VIEWS = {
 
     if (nx) h += `<div class="card"><div class="eyebrow">Next pay day · ${esc(C.fmtD(nx.payday))}</div>
       <div class="payhead"><div class="big">${C.gbp(nx.net)}</div><div class="muted">${nx.extraGross ? 'incl. ' + C.gbp(nx.extra) + ' from overtime' : 'no overtime logged yet'}</div></div>
-      <div class="muted small lead">${nx.ot || 0} overtime hrs · ${nx.sun || 0} Sunday hrs · period ${esc(C.fmtDM(nx.start))} – ${esc(C.fmtDM(nx.end))}</div>
+      <div class="muted small lead">${nx.ot || 0}\u00a0overtime\u00a0hrs\u00a0· ${nx.sun || 0}\u00a0Sunday\u00a0hrs\u00a0· period ${esc(C.fmtDM(nx.start))}\u00a0– ${esc(C.fmtDM(nx.end))}</div>
       <button class="btn teal" data-act="tab" data-tab="pay">Log hours</button></div>`;
 
     if (pots.balance || pots.goals.length || pots.got.length) {
@@ -2342,7 +2368,7 @@ const VIEWS = {
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editJobs">${ui.editJobs ? 'Done' : 'Edit jobs'}</button>${ui.editJobs ? '<button class="btn sm" data-act="addJob">Add job</button>' : ''}</div>
       <div class="note">Tap a status to move it on: To do → In progress → Done (sets today's date).</div></div>`;
     const cols = C.collections(S); const c = cols.find(x => x.key === ui.set) || cols[0];
-    h += `<div class="card"><h2>Collections</h2><div class="chips">${cols.filter(x => x.key !== 'PSM demos').map(x => `<button class="chip ${x.key === c.key || (c.key === 'PSM demos' && x.key === 'PSM') ? 'on' : ''}" data-act="set" data-set="${esc(x.key)}">${esc(x.label)}</button>`).join('')}</div>
+    h += `<div class="card"><h2>Collections</h2><div class="chips">${cols.filter(x => x.key !== 'PSM demos').map(x => `<button class="chip ${x.key === c.key || (c.key === 'PSM demos' && x.key === 'PSM') ? 'on' : ''}" aria-pressed="${x.key === c.key || (c.key === 'PSM demos' && x.key === 'PSM')}" data-act="set" data-set="${esc(x.key)}">${esc(x.label)}</button>`).join('')}</div>
       ${c.key.startsWith('PSM') ? cols.filter(x => x.key.startsWith('PSM')).map(x => `<div class="prow"><span><b>${esc(x.label)}</b></span><span class="num muted small">${x.have} / ${x.total} · ${C.pct(x.pct)}</span>${bar(x.pct)}</div>`).join('') : `<div class="prow"><span><b>${esc(c.label)}</b></span><span class="num muted small">${c.have} / ${c.total} · ${C.pct(c.pct)}</span>${bar(c.pct)}</div>`}
       <div class="field searchbox"><input type="search" id="search" placeholder="Search…" aria-label="Search this collection" value="${esc(ui.search)}"></div>
       <div id="ticklist">${tickList()}</div></div>`;
@@ -2474,12 +2500,12 @@ function payBoard(p, idx, r) {
     if (!open) return head;
     return head + g.rows.map(({ x, i }) => `<button class="brow ${x.past ? 'past' : ''} ${x.next ? 'nextpd' : ''} ${i === idx ? 'sel' : ''}" data-act="pick" data-payday="${x.payday}"${i === idx ? ' aria-current="true"' : ''}>
       <span class="bl"><span class="d">${esc(C.fmtD(x.payday))}</span><span class="pr">${esc(C.fmtDM(x.start))} – ${esc(C.fmtDM(x.end))}</span>${x.next ? '<span class="tag">NEXT</span>' : ''}</span>
-      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.actual !== null ? '<span class="muted small">off your payslip</span>' : ''}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
+      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h\u00a0overtime' : ''}${x.ot && x.sun ? '\u00a0· ' : ''}${x.sun ? x.sun + 'h\u00a0Sunday' : ''}` : '<span class="muted">—</span>'}${x.actual !== null ? '<span class="muted small">off your payslip</span>' : ''}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
       <span class="n">${C.gbp(x.net, 0)}${x.extraGross ? `<span class="muted small">+${C.gbp(x.extra, 0)}</span>` : ''}</span></button>`).join('');
   }).join('');
   return `<div class="card board"><h2>Pay days</h2><div class="muted small mb4">Tap a year to open or close it, then tap a pay day to log hours for it.</div>
     ${years}
-    <div class="row mt8"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h overtime · ${p.totals.sun}h Sunday · ${C.gbp(p.totals.extraGross, 0)} gross extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
+    <div class="row mt8"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h\u00a0overtime\u00a0· ${p.totals.sun}h\u00a0Sunday\u00a0· ${C.gbp(p.totals.extraGross, 0)}\u00a0gross\u00a0extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
     ${p.totals.actuals ? `<div class="note">${p.totals.actuals} pay day${p.totals.actuals === 1 ? '' : 's'} came off a payslip rather than the projection${
       p.totals.diff ? `, and ${C.gbp(Math.abs(p.totals.diff))} ${p.totals.diff > 0 ? 'more' : 'less'} than projected across the year so far` : ', matching it exactly'}.</div>` : ''}
   </div>`;
@@ -2511,7 +2537,7 @@ function pinCard() {
         ? '<button class="btn ghost sm" data-act="changePin">Change</button><button class="btn danger sm" data-act="clearPin">Turn off</button>'
         : '<button class="btn sm" data-act="setPin">Set a PIN</button>'}</div></div>
     <div class="note">${pinIsSet()
-      ? 'A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.'
+      ? 'A downloaded or copied backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep it somewhere safe. Changing or turning off the PIN asks for the one you use now, and the figures are covered when the app goes to the background.'
       : 'Encrypts everything stored on this device with a PIN only you know. If you forget it the data cannot be recovered, so a backup is downloaded first.'}</div></div>`;
 }
 /* Spending the app worked out for itself. Two balance readings and the bills
@@ -2708,9 +2734,20 @@ function restoreFocus(f) {
   el.focus({ preventScroll: true });
   if (f.start !== null && f.start !== undefined) { try { el.setSelectionRange(f.start, f.end); } catch (e) { } }
 }
+/* The bottom bar is a tab list, so it behaves like one from a keyboard or a
+   screen reader: Tab reaches it once, on the tab in use, and the arrow keys
+   (Home and End too) move along it and open the tab they land on. */
 function buildTabs() {
   const n = $('#tabs');
-  n.innerHTML = TABS.map(t => `<button role="tab" data-act="tab" data-tab="${t.k}" aria-selected="false" aria-controls="view">${svg(t.d)}<span>${t.l}</span></button>`).join('');
+  n.innerHTML = TABS.map(t => `<button role="tab" data-act="tab" data-tab="${t.k}" aria-selected="false" aria-controls="view" tabindex="-1">${svg(t.d)}<span>${t.l}</span></button>`).join('');
+  n.addEventListener('keydown', e => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, Home: 'first', End: 'last' }[e.key];
+    const list = [...n.querySelectorAll('[role="tab"]')], at = list.indexOf(document.activeElement);
+    if (step === undefined || at < 0 || !S) return;
+    e.preventDefault();
+    const to = step === 'first' ? 0 : step === 'last' ? list.length - 1 : (at + step + list.length) % list.length;
+    tab = list[to].dataset.tab; render(false); list[to].focus();
+  });
 }
 function render(keepScroll = true) {
   const y = window.scrollY, focus = rememberFocus();
@@ -2724,9 +2761,12 @@ function render(keepScroll = true) {
       <button class="btn danger" data-act="reset">Reset everything</button></div></div>` };
   }
   $('#title').textContent = v.title; $('#sub').textContent = v.sub || ''; $('#view').innerHTML = v.html;
-  document.querySelectorAll('.tabs button').forEach(b => {
+  // Settings is not in the bar, so while it is open Home keeps the bar's one tab stop
+  const inBar = TABS.some(t => t.k === tab);
+  document.querySelectorAll('.tabs button').forEach((b, i) => {
     const on = b.dataset.tab === tab;
     b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on || (!inBar && i === 0) ? 0 : -1;
   });
   $('#settingsBtn').classList.toggle('on', tab === 'settings');
   const u = $('#undoBtn'), last = hist.past[hist.past.length - 1];
@@ -2908,7 +2948,14 @@ document.addEventListener('click', async e => {
   }
   if (a === 'import') { $('#importFile').click(); return; }
   if (a === 'export') { exportBackup(); return; }
-  if (a === 'copy') { (navigator.clipboard ? navigator.clipboard.writeText(JSON.stringify(S)) : Promise.reject()).then(() => toast('Backup copied — paste it somewhere safe'), () => toast('Copy not available here')); return; }
+  if (a === 'copy') {
+    /* The PIN covers what the app stores, not the clipboard: a copied backup is
+       plain text, and clipboard history or sync can keep it long after. */
+    if (pinIsSet() && !(await dialog({ title: 'Copy it unencrypted?',
+      body: 'Your PIN protects what is stored in the app, not the clipboard. A copied backup is plain text, and clipboard history or sync can hold on to it. Paste it somewhere safe, then clear the clipboard.',
+      ok: 'Copy anyway' }))) return;
+    (navigator.clipboard ? navigator.clipboard.writeText(JSON.stringify(S)) : Promise.reject()).then(() => toast('Backup copied — paste it somewhere safe'), () => toast('Copy not available here')); return;
+  }
   if (a === 'reset') { if (await confirmDlg(SEED.generic ? 'Clear everything on this device?' : 'Reset to the spreadsheet data?',
       SEED.generic ? 'Restore a backup to get it back.' : 'Your changes on this device will be lost.', 'Yes, clear it')) {
       S = clone(SEED); normalize(); commit('the reset'); toast(SEED.generic ? 'Cleared' : 'Reset to spreadsheet data', UNDO); } return; }
@@ -2991,10 +3038,15 @@ let lastDay = null;
 function dayWatch() { if (!S) return; const d = C.today(); if (d !== lastDay) { lastDay = d; render(); } }
 const AUTOLOCK_MS = 5 * 60 * 1000;
 let hiddenAt = 0;
+/* With a PIN set, the figures are covered the moment the app goes to the
+   background, so the picture the phone keeps for its app switcher shows
+   nothing — as far as the phone gives the page time to do it — and nor does
+   the moment before the lock screen comes back. */
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (document.hidden) { hiddenAt = Date.now(); if (pinIsSet()) document.body.classList.add('veiled'); return; }
   // away long enough with a PIN set: reload so the lock screen comes back
   if (pinIsSet() && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) { location.reload(); return; }
+  document.body.classList.remove('veiled');
   dayWatch();
 });
 addEventListener('focus', dayWatch);

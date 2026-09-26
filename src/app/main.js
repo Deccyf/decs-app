@@ -20,9 +20,20 @@ function restoreFocus(f) {
   el.focus({ preventScroll: true });
   if (f.start !== null && f.start !== undefined) { try { el.setSelectionRange(f.start, f.end); } catch (e) { } }
 }
+/* The bottom bar is a tab list, so it behaves like one from a keyboard or a
+   screen reader: Tab reaches it once, on the tab in use, and the arrow keys
+   (Home and End too) move along it and open the tab they land on. */
 function buildTabs() {
   const n = $('#tabs');
-  n.innerHTML = TABS.map(t => `<button role="tab" data-act="tab" data-tab="${t.k}" aria-selected="false" aria-controls="view">${svg(t.d)}<span>${t.l}</span></button>`).join('');
+  n.innerHTML = TABS.map(t => `<button role="tab" data-act="tab" data-tab="${t.k}" aria-selected="false" aria-controls="view" tabindex="-1">${svg(t.d)}<span>${t.l}</span></button>`).join('');
+  n.addEventListener('keydown', e => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, Home: 'first', End: 'last' }[e.key];
+    const list = [...n.querySelectorAll('[role="tab"]')], at = list.indexOf(document.activeElement);
+    if (step === undefined || at < 0 || !S) return;
+    e.preventDefault();
+    const to = step === 'first' ? 0 : step === 'last' ? list.length - 1 : (at + step + list.length) % list.length;
+    tab = list[to].dataset.tab; render(false); list[to].focus();
+  });
 }
 function render(keepScroll = true) {
   const y = window.scrollY, focus = rememberFocus();
@@ -36,9 +47,12 @@ function render(keepScroll = true) {
       <button class="btn danger" data-act="reset">Reset everything</button></div></div>` };
   }
   $('#title').textContent = v.title; $('#sub').textContent = v.sub || ''; $('#view').innerHTML = v.html;
-  document.querySelectorAll('.tabs button').forEach(b => {
+  // Settings is not in the bar, so while it is open Home keeps the bar's one tab stop
+  const inBar = TABS.some(t => t.k === tab);
+  document.querySelectorAll('.tabs button').forEach((b, i) => {
     const on = b.dataset.tab === tab;
     b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on || (!inBar && i === 0) ? 0 : -1;
   });
   $('#settingsBtn').classList.toggle('on', tab === 'settings');
   const u = $('#undoBtn'), last = hist.past[hist.past.length - 1];
@@ -220,7 +234,14 @@ document.addEventListener('click', async e => {
   }
   if (a === 'import') { $('#importFile').click(); return; }
   if (a === 'export') { exportBackup(); return; }
-  if (a === 'copy') { (navigator.clipboard ? navigator.clipboard.writeText(JSON.stringify(S)) : Promise.reject()).then(() => toast('Backup copied — paste it somewhere safe'), () => toast('Copy not available here')); return; }
+  if (a === 'copy') {
+    /* The PIN covers what the app stores, not the clipboard: a copied backup is
+       plain text, and clipboard history or sync can keep it long after. */
+    if (pinIsSet() && !(await dialog({ title: 'Copy it unencrypted?',
+      body: 'Your PIN protects what is stored in the app, not the clipboard. A copied backup is plain text, and clipboard history or sync can hold on to it. Paste it somewhere safe, then clear the clipboard.',
+      ok: 'Copy anyway' }))) return;
+    (navigator.clipboard ? navigator.clipboard.writeText(JSON.stringify(S)) : Promise.reject()).then(() => toast('Backup copied — paste it somewhere safe'), () => toast('Copy not available here')); return;
+  }
   if (a === 'reset') { if (await confirmDlg(SEED.generic ? 'Clear everything on this device?' : 'Reset to the spreadsheet data?',
       SEED.generic ? 'Restore a backup to get it back.' : 'Your changes on this device will be lost.', 'Yes, clear it')) {
       S = clone(SEED); normalize(); commit('the reset'); toast(SEED.generic ? 'Cleared' : 'Reset to spreadsheet data', UNDO); } return; }
@@ -303,10 +324,15 @@ let lastDay = null;
 function dayWatch() { if (!S) return; const d = C.today(); if (d !== lastDay) { lastDay = d; render(); } }
 const AUTOLOCK_MS = 5 * 60 * 1000;
 let hiddenAt = 0;
+/* With a PIN set, the figures are covered the moment the app goes to the
+   background, so the picture the phone keeps for its app switcher shows
+   nothing — as far as the phone gives the page time to do it — and nor does
+   the moment before the lock screen comes back. */
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (document.hidden) { hiddenAt = Date.now(); if (pinIsSet()) document.body.classList.add('veiled'); return; }
   // away long enough with a PIN set: reload so the lock screen comes back
   if (pinIsSet() && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) { location.reload(); return; }
+  document.body.classList.remove('veiled');
   dayWatch();
 });
 addEventListener('focus', dayWatch);

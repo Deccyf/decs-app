@@ -273,7 +273,7 @@ test('formatting', () => {
   assert.equal(C.gbp(null), '–');
   assert.equal(C.gbp(1234.5, 0), '£1,235');
   assert.equal(C.pct(0.5), '50%');
-  assert.equal(C.fmtD('2026-09-09'), '9 Sep 2026');
+  assert.equal(C.fmtD('2026-09-09').replace(/\s/g, ' '), '9 Sep 2026');
   assert.equal(C.ord(1), '1st');
   assert.equal(C.ord(2), '2nd');
   assert.equal(C.ord(3), '3rd');
@@ -1182,4 +1182,11 @@ test('the spending log is the same worked in one pass', () => {
   const sp = C.spendLog(m, p, OPT, '2026-09-26');
   // every window agrees with the bills worked out for that window alone
   sp.windows.forEach(w => assert.equal(w.bills, C.r2(C.billEvents(m, C.addDays(w.from, 1), w.to, OPT).reduce((a, e) => a + e.amount, 0)), w.from));
+});
+
+test('a date never splits across two lines', () => {
+  // every space inside a formatted date is a non-breaking one
+  for (const s of [C.fmtD('2027-03-12'), C.fmtDM('2027-03-12'), C.fmtDow('2027-03-12'), C.fmtM('2027-03'), C.fmtMs('2027-03')])
+    assert.ok(!s.includes(' ') && / /.test(s), JSON.stringify(s));
+  assert.equal(C.fmtD('2027-03-12'), '12 Mar 2027');
 });

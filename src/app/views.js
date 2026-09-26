@@ -152,7 +152,7 @@ const VIEWS = {
 
     if (nx) h += `<div class="card"><div class="eyebrow">Next pay day · ${esc(C.fmtD(nx.payday))}</div>
       <div class="payhead"><div class="big">${C.gbp(nx.net)}</div><div class="muted">${nx.extraGross ? 'incl. ' + C.gbp(nx.extra) + ' from overtime' : 'no overtime logged yet'}</div></div>
-      <div class="muted small lead">${nx.ot || 0} overtime hrs · ${nx.sun || 0} Sunday hrs · period ${esc(C.fmtDM(nx.start))} – ${esc(C.fmtDM(nx.end))}</div>
+      <div class="muted small lead">${nx.ot || 0}\u00a0overtime\u00a0hrs\u00a0· ${nx.sun || 0}\u00a0Sunday\u00a0hrs\u00a0· period ${esc(C.fmtDM(nx.start))}\u00a0– ${esc(C.fmtDM(nx.end))}</div>
       <button class="btn teal" data-act="tab" data-tab="pay">Log hours</button></div>`;
 
     if (pots.balance || pots.goals.length || pots.got.length) {
@@ -406,7 +406,7 @@ const VIEWS = {
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editJobs">${ui.editJobs ? 'Done' : 'Edit jobs'}</button>${ui.editJobs ? '<button class="btn sm" data-act="addJob">Add job</button>' : ''}</div>
       <div class="note">Tap a status to move it on: To do → In progress → Done (sets today's date).</div></div>`;
     const cols = C.collections(S); const c = cols.find(x => x.key === ui.set) || cols[0];
-    h += `<div class="card"><h2>Collections</h2><div class="chips">${cols.filter(x => x.key !== 'PSM demos').map(x => `<button class="chip ${x.key === c.key || (c.key === 'PSM demos' && x.key === 'PSM') ? 'on' : ''}" data-act="set" data-set="${esc(x.key)}">${esc(x.label)}</button>`).join('')}</div>
+    h += `<div class="card"><h2>Collections</h2><div class="chips">${cols.filter(x => x.key !== 'PSM demos').map(x => `<button class="chip ${x.key === c.key || (c.key === 'PSM demos' && x.key === 'PSM') ? 'on' : ''}" aria-pressed="${x.key === c.key || (c.key === 'PSM demos' && x.key === 'PSM')}" data-act="set" data-set="${esc(x.key)}">${esc(x.label)}</button>`).join('')}</div>
       ${c.key.startsWith('PSM') ? cols.filter(x => x.key.startsWith('PSM')).map(x => `<div class="prow"><span><b>${esc(x.label)}</b></span><span class="num muted small">${x.have} / ${x.total} · ${C.pct(x.pct)}</span>${bar(x.pct)}</div>`).join('') : `<div class="prow"><span><b>${esc(c.label)}</b></span><span class="num muted small">${c.have} / ${c.total} · ${C.pct(c.pct)}</span>${bar(c.pct)}</div>`}
       <div class="field searchbox"><input type="search" id="search" placeholder="Search…" aria-label="Search this collection" value="${esc(ui.search)}"></div>
       <div id="ticklist">${tickList()}</div></div>`;

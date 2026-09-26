@@ -97,12 +97,12 @@ function payBoard(p, idx, r) {
     if (!open) return head;
     return head + g.rows.map(({ x, i }) => `<button class="brow ${x.past ? 'past' : ''} ${x.next ? 'nextpd' : ''} ${i === idx ? 'sel' : ''}" data-act="pick" data-payday="${x.payday}"${i === idx ? ' aria-current="true"' : ''}>
       <span class="bl"><span class="d">${esc(C.fmtD(x.payday))}</span><span class="pr">${esc(C.fmtDM(x.start))} – ${esc(C.fmtDM(x.end))}</span>${x.next ? '<span class="tag">NEXT</span>' : ''}</span>
-      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h overtime' : ''}${x.ot && x.sun ? ' · ' : ''}${x.sun ? x.sun + 'h Sunday' : ''}` : '<span class="muted">—</span>'}${x.actual !== null ? '<span class="muted small">off your payslip</span>' : ''}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
+      <span class="h">${x.ot || x.sun ? `${x.ot ? x.ot + 'h\u00a0overtime' : ''}${x.ot && x.sun ? '\u00a0· ' : ''}${x.sun ? x.sun + 'h\u00a0Sunday' : ''}` : '<span class="muted">—</span>'}${x.actual !== null ? '<span class="muted small">off your payslip</span>' : ''}${x.hpaPay ? '<span class="muted small">+ EU Holiday Pay ' + C.gbp(x.hpaPay, 0) + '</span>' : ''}${x.backpay ? '<span class="muted small">+ backpay ' + C.gbp(x.backpay, 0) + '</span>' : ''}</span>
       <span class="n">${C.gbp(x.net, 0)}${x.extraGross ? `<span class="muted small">+${C.gbp(x.extra, 0)}</span>` : ''}</span></button>`).join('');
   }).join('');
   return `<div class="card board"><h2>Pay days</h2><div class="muted small mb4">Tap a year to open or close it, then tap a pay day to log hours for it.</div>
     ${years}
-    <div class="row mt8"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h overtime · ${p.totals.sun}h Sunday · ${C.gbp(p.totals.extraGross, 0)} gross extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
+    <div class="row mt8"><div class="l"><b>Tax year ${esc(p.taxYear)}</b><small>${p.totals.ot}h\u00a0overtime\u00a0· ${p.totals.sun}h\u00a0Sunday\u00a0· ${C.gbp(p.totals.extraGross, 0)}\u00a0gross\u00a0extra</small></div><div class="num tr"><b>${C.gbp(p.totals.net, 0)}</b><div class="muted small">+${C.gbp(p.totals.extra, 0)} overtime</div></div></div>
     ${p.totals.actuals ? `<div class="note">${p.totals.actuals} pay day${p.totals.actuals === 1 ? '' : 's'} came off a payslip rather than the projection${
       p.totals.diff ? `, and ${C.gbp(Math.abs(p.totals.diff))} ${p.totals.diff > 0 ? 'more' : 'less'} than projected across the year so far` : ', matching it exactly'}.</div>` : ''}
   </div>`;
@@ -134,7 +134,7 @@ function pinCard() {
         ? '<button class="btn ghost sm" data-act="changePin">Change</button><button class="btn danger sm" data-act="clearPin">Turn off</button>'
         : '<button class="btn sm" data-act="setPin">Set a PIN</button>'}</div></div>
     <div class="note">${pinIsSet()
-      ? 'A downloaded backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep the file somewhere safe.'
+      ? 'A downloaded or copied backup is <b>not</b> encrypted, so it can be restored on a new phone. Keep it somewhere safe. Changing or turning off the PIN asks for the one you use now, and the figures are covered when the app goes to the background.'
       : 'Encrypts everything stored on this device with a PIN only you know. If you forget it the data cannot be recovered, so a backup is downloaded first.'}</div></div>`;
 }
 /* Spending the app worked out for itself. Two balance readings and the bills

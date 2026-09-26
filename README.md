@@ -180,6 +180,16 @@ sealed with it. The PIN itself is never stored, so a forgotten one cannot be
 recovered. Backups are deliberately written in the clear, which is the only way
 back in.
 
+It is there for a phone picked up while unlocked, so that phone cannot undo it:
+changing the PIN or turning it off asks for the one in use first. There is still
+nothing stored to compare against — `pinMatches()` seals a byte with the key in
+hand and checks the typed PIN's key opens it. While a PIN is set the figures are
+covered the moment the app goes to the background (`body.veiled`), so the
+picture the phone keeps for its app switcher shows nothing, as far as the phone
+gives the page time to redraw, and after five minutes away it locks. Copying a
+backup to the clipboard says first that it is plain text, since clipboard
+history and sync are outside anything the PIN covers.
+
 **The data lives on one phone**, so two things guard it: `askPersist()` asks the
 browser for persistent storage on boot, and `S.backupOn` records the last
 download so Home can nudge when it goes stale.
@@ -202,6 +212,15 @@ in another tab reloads this one when it saves, and with no key in hand nothing
 is written over data that copy has encrypted. A PIN blob records the iterations
 it was really sealed at, and one from an older strength is resealed at today's
 the moment it is opened.
+
+**Screen and keyboard.** Every label is tied to its field, so tapping the words
+focuses the box and a screen reader names it by them. The tab bar is a proper
+tab list: one tab stop, on the tab in use, with the arrow keys (and Home and
+End) moving along it. Dates are formatted with non-breaking spaces, so "12 Mar
+2027" wraps as a whole, and the same goes for "7h Sunday" and the separators
+between figures. Colours are tokens with text contrast of at least 4.5:1 on
+their backgrounds and field edges at 3:1, and a theme picked in Settings sets
+`color-scheme` too, so the browser's own date pickers and dialogs follow it.
 
 ## Tests
 

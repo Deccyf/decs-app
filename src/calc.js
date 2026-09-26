@@ -17,11 +17,15 @@ const C = (() => {
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dow = s => i2d(s).getUTCDay();
-  const fmtD = s => { if (!s) return ''; const d = i2d(s); return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
-  const fmtDM = s => { const d = i2d(s); return `${String(d.getUTCDate()).padStart(2, '0')} ${MON[d.getUTCMonth()]}`; };
-  const fmtDow = s => `${DOW[dow(s)]} ${fmtDM(s)}`;
-  const fmtM = k => `${MON[+k.slice(5, 7) - 1]} ${k.slice(0, 4)}`;
-  const fmtMs = k => `${MON[+k.slice(5, 7) - 1]} ${k.slice(2, 4)}`;
+  /* The spaces inside a date are non-breaking, so "12 Mar 2027" wraps as a
+     whole rather than leaving "12" at the end of one line and "Mar 2027" on the
+     next. A regex \s still matches them. */
+  const NB = '\u00a0';
+  const fmtD = s => { if (!s) return ''; const d = i2d(s); return `${d.getUTCDate()}${NB}${MON[d.getUTCMonth()]}${NB}${d.getUTCFullYear()}`; };
+  const fmtDM = s => { const d = i2d(s); return `${String(d.getUTCDate()).padStart(2, '0')}${NB}${MON[d.getUTCMonth()]}`; };
+  const fmtDow = s => `${DOW[dow(s)]}${NB}${fmtDM(s)}`;
+  const fmtM = k => `${MON[+k.slice(5, 7) - 1]}${NB}${k.slice(0, 4)}`;
+  const fmtMs = k => `${MON[+k.slice(5, 7) - 1]}${NB}${k.slice(2, 4)}`;
   const ord = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
   // made once and kept: toLocaleString with options builds a new formatter for every figure on the page
   const nfs = {};

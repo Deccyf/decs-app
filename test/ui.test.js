@@ -304,8 +304,8 @@ test('turning the PIN off puts the data back in the clear', skip, async t => {
   await turnPinOn(page, '482913');
   await page.click('[data-act="clearPin"]');
   await page.waitForTimeout(250);
-  await page.click('#dlgForm button[value="ok"]');
-  await page.waitForTimeout(600);
+  await page.fill('#dlgIn', '482913'); await page.click('#dlgForm button[value="ok"]');
+  await page.waitForTimeout(1200);
   assert.ok(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).money, 'plain JSON again');
   await page.reload();
   await page.waitForSelector('#view .card', { timeout: 5000 });
@@ -851,7 +851,7 @@ test('Home is a dashboard: attention items, this week, and headline tiles', skip
 
   const tiles = await page.$$eval('.tile .cap', es => es.map(e => e.textContent));
   assert.deepEqual(tiles, ['Safe to spend', 'Next pay day', 'Saved this year', 'Savings less short-term debt']);
-  assert.match(await page.$eval('.tiles', e => e.textContent), /in 16 days · Fri 25 Sep/);
+  assert.match(await page.$eval('.tiles', e => e.textContent), /in 16 days · Fri\s25\sSep/);
 
   await page.click('.attnrow'); await page.waitForTimeout(300);
   assert.equal(await page.$eval('#title', e => e.textContent), 'Money', 'an attention row opens the section that deals with it');
@@ -1371,7 +1371,7 @@ test('a fixed rate running out asks for the new one', skip, async t => {
   data.money.debts = [{ id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08,
     repayment: 958.41, apr: 0.041, balanceOn: '2027-09-01', rateEnds: '2027-09' }];
   const page = await open(t, { on: '2027-09-20', data });
-  assert.match(await page.$eval('#view', e => e.textContent), /fixed rate ended Sep 2027/);
+  assert.match(await page.$eval('#view', e => e.textContent), /fixed rate ended Sep\s2027/);
   assert.match(await page.$eval('#view', e => e.textContent), /still assume 4\.1%/, 'the real rate, not 4% rounded');
 
   await page.click('.attnrow:has-text("fixed rate ended")'); await page.waitForTimeout(300);
@@ -1416,7 +1416,7 @@ test('on pay day the money is there from midnight, not the next morning', skip, 
 test('on pay day the board marks it paid and moves NEXT on', skip, async t => {
   const page = await open(t, { on: '2026-09-25', data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'pay' });
   const rows = await page.$$eval('.board .brow', rs => rs.map(r => ({
-    date: r.querySelector('.d').textContent.trim(), past: r.classList.contains('past'),
+    date: r.querySelector('.d').textContent.replace(/\s/g, ' ').trim(), past: r.classList.contains('past'),
     next: r.classList.contains('nextpd'), chip: !!r.querySelector('.tag') })));
   const today = rows.find(r => /25 Sep 2026/.test(r.date));
   assert.equal(today.past, true, 'today reads as paid');
@@ -1426,7 +1426,7 @@ test('on pay day the board marks it paid and moves NEXT on', skip, async t => {
   assert.equal(upcoming.date, '23 Oct 2026', 'NEXT is the one four weeks out');
   assert.equal(upcoming.chip, true);
   assert.match(await page.$eval('#view .eyebrow', e => e.textContent), /Next pay day/);
-  assert.equal(await page.$eval('#view .payhead .big', e => e.textContent), '23 Oct 2026',
+  assert.equal(await page.$eval('#view .payhead .big', e => e.textContent.replace(/\s/g, ' ')), '23 Oct 2026',
     'and the payslip card is already showing the next one');
 });
 
@@ -1484,12 +1484,12 @@ test('a pay day off a payslip is marked as such on the board', skip, async t => 
 test('Home reminds you to put the payslip figure in, and lands you on it', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
   const page = await open(t, { on: '2026-09-22', data });                // three days before pay day
-  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25 Sep should be out/);
+  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25\sSep should be out/);
   assert.match(await page.$eval('#view', e => e.textContent), /Pay day is in 3 days/);
 
-  await page.click('.attnrow:has-text("Payslip for 25 Sep")'); await page.waitForTimeout(350);
+  await page.click('.attnrow:has-text("Payslip for")'); await page.waitForTimeout(350);
   assert.equal(await page.$eval('#title', e => e.textContent), 'Pay', 'straight to the Pay tab');
-  assert.equal(await page.$eval('#view .payhead .big', e => e.textContent), '25 Sep 2026',
+  assert.equal(await page.$eval('#view .payhead .big', e => e.textContent.replace(/\s/g, ' ')), '25 Sep 2026',
     'with that pay day already picked, so the box is right there');
 
   await page.fill('[data-set="pay.actual.2026-09-25"]', '2563.09');
@@ -1502,7 +1502,7 @@ test('Home reminds you to put the payslip figure in, and lands you on it', skip,
 test('the reminder covers a pay day that went by without one', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
   const page = await open(t, { on: '2026-09-27', data });                // two days after pay day
-  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25 Sep\./);
+  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25\sSep\./);
   assert.match(await page.$eval('#view', e => e.textContent), /Paid 2 days ago and still on the projection/);
 
   const gone = await open(t, { on: '2026-10-05', data });                // well past it
@@ -1513,7 +1513,7 @@ test('how early the payslip lands is a setting', skip, async t => {
   const data = JSON.parse(JSON.stringify(SAMPLE));
   data.pay.payslipLead = 7;
   const page = await open(t, { on: '2026-09-19', data });                // six days out
-  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25 Sep should be out/);
+  assert.match(await page.$eval('#view', e => e.textContent), /Payslip for 25\sSep should be out/);
   await page.click('.tabs button[data-tab="pay"]'); await page.waitForTimeout(300);
   assert.equal(await page.$eval('[data-set="pay.payslipLead"]', e => e.value), '7', 'and it is editable');
 });
@@ -1581,7 +1581,7 @@ test('a debt says when it is expected to clear, and every line fits', skip, asyn
   assert.deepEqual(await stored(page).then(s => s.money.debts.map(d => d.balanceOn)), ['2026-09-26', '2026-09-26'],
     'debts entered before dates were kept start carrying from today');
   const card = (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' ')))).find(c => c.includes('Total owed'));
-  assert.match(card, /Barclaycard.*Expected clear Mar 2027/);
+  assert.match(card, /Barclaycard.*Expected clear Mar\s2027/);
   assert.match(card, /6 payments left/);
   const wraps = await page.$$eval('#view .card:has(h2:text-is("Debt")) .row small, #view .card:has(h2:text-is("Debt")) .row .num .small', ss => ss
     .map(s => ({ t: s.textContent.trim(), n: Math.round(s.getBoundingClientRect().height / parseFloat(getComputedStyle(s).lineHeight)) }))
@@ -1590,7 +1590,7 @@ test('a debt says when it is expected to clear, and every line fits', skip, asyn
 
   // the linked bill follows it, and knows when it stops
   await page.click('[data-act="moneyTab"][data-v="bills"]'); await page.waitForTimeout(300);
-  assert.match(await page.$eval('#view', e => e.textContent), /follows your short-term debt repayments, last one clears Mar 2027/);
+  assert.match(await page.$eval('#view', e => e.textContent), /follows your short-term debt repayments, last one clears Mar\s2027/);
 });
 
 test('changing the price of a bill with a known end keeps the end', skip, async t => {
@@ -1828,4 +1828,94 @@ test('a failed save is said once, and saving picks up again when it can', skip, 
   await page.fill('[data-set="money.buffer"]', '500');
   await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(400);
   assert.equal((await stored(page)).money.buffer, 500, 'the next change is kept');
+});
+
+/* ---------- PIN, app switcher, keyboard ---------- */
+test('changing the PIN asks for the one in use first', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, '482913');
+  const salt = () => page.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).salt);
+  const before = await salt();
+  // someone who picked the phone up does not know it
+  await page.click('[data-act="changePin"]'); await page.waitForTimeout(250);
+  await page.fill('#dlgIn', '000000'); await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(1500);
+  assert.match(await page.$eval('#toast', e => e.textContent), /isn't your current PIN/);
+  assert.equal(await page.evaluate(() => document.getElementById('dlg').open), false, 'and is not asked for a new one');
+  assert.equal(await salt(), before, 'nothing changed');
+  // the owner does
+  await page.click('[data-act="changePin"]'); await page.waitForTimeout(250);
+  await page.fill('#dlgIn', '482913'); await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(1500);
+  await page.fill('#dlgIn', '771122'); await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(300);
+  await page.fill('#dlgIn', '771122'); await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(1500);
+  assert.notEqual(await salt(), before, 'resealed');
+  await page.reload();
+  await page.waitForSelector('#lock:not([hidden])', { timeout: 5000 });
+  await page.fill('#pinIn', '771122'); await page.click('#lockGo');
+  await page.waitForSelector('#view .card', { timeout: 10000 });
+});
+
+test('turning the PIN off needs the PIN', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await turnPinOn(page, '482913');
+  await page.click('[data-act="clearPin"]'); await page.waitForTimeout(250);
+  await page.fill('#dlgIn', '123456'); await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(1500);
+  assert.match(await page.$eval('#toast', e => e.textContent), /lock stays on/);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).decsEnc, 1, 'still encrypted');
+});
+
+test('with a PIN set the figures are covered while the app is in the background', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  const away = hidden => page.evaluate(h => { Object.defineProperty(document, 'hidden', { value: h, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange')); }, hidden);
+  const shown = () => page.$eval('#view', e => getComputedStyle(e).visibility);
+  await away(true);
+  assert.equal(await shown(), 'visible', 'no PIN, nothing to hide');
+  await away(false);
+  await turnPinOn(page, '482913');
+  await away(true);
+  assert.equal(await shown(), 'hidden', 'covered in the app switcher');
+  assert.equal(await page.$eval('.tabs', e => getComputedStyle(e).visibility), 'hidden');
+  await away(false);
+  assert.equal(await shown(), 'visible', 'and back as soon as the app is');
+});
+
+test('copying a backup with a PIN set says it is not encrypted first', skip, async t => {
+  const page = await open(t);
+  page.on('download', d => d.cancel().catch(() => {}));
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  await page.click('[data-act="copy"]'); await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => document.getElementById('dlg').open), false, 'no PIN, no warning');
+  await turnPinOn(page, '482913');
+  await page.click('[data-act="copy"]'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('#dlgForm', e => e.textContent), /Copy it unencrypted\?.*clipboard history/);
+  await page.click('#dlgForm button[value="cancel"]'); await page.waitForTimeout(300);
+  assert.doesNotMatch(await page.$eval('#toast', e => e.textContent), /Backup copied/, 'cancel copies nothing');
+});
+
+test('the tab bar is one tab stop, and the arrow keys move along it', skip, async t => {
+  const page = await open(t);
+  const state = () => page.$$eval('.tabs [role="tab"]', bs => bs.map(b => [b.dataset.tab, b.tabIndex, b.getAttribute('aria-selected'), b === document.activeElement]));
+  let s = await state();
+  assert.deepEqual(s.filter(x => x[1] === 0).map(x => x[0]), ['home'], 'only the tab in use is a tab stop');
+  await page.focus('.tabs [data-tab="home"]');
+  await page.keyboard.press('ArrowRight'); await page.waitForTimeout(200);
+  s = await state();
+  assert.deepEqual(s.find(x => x[3]), ['pay', 0, 'true', true], 'right arrow opens Pay and keeps the focus on it');
+  assert.equal(await page.$eval('#title', e => e.textContent), 'Pay');
+  await page.keyboard.press('End'); await page.waitForTimeout(200);
+  assert.equal((await state()).find(x => x[3])[0], 'games');
+  await page.keyboard.press('ArrowRight'); await page.waitForTimeout(200);
+  assert.equal((await state()).find(x => x[3])[0], 'home', 'round from the end to the start');
+  await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(200);
+  assert.equal((await state()).find(x => x[3])[0], 'games');
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  assert.deepEqual((await state()).filter(x => x[1] === 0).map(x => x[0]), ['home'], 'Settings open: the bar can still be reached');
+});
+
+test('the collection chips say which one is showing', skip, async t => {
+  const page = await open(t, { tab: 'lists' });
+  assert.deepEqual(await page.$$eval('.chips .chip[aria-pressed="true"]', cs => cs.map(c => c.textContent)), ['Base Set']);
 });
