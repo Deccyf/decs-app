@@ -75,15 +75,25 @@ overdraft counts as spendable room; a buffer does not.
 **Bills.** A bill can have months off (`skip`, month numbers) for council tax
 over ten instalments or a gym frozen for winter, and a month it changes price
 each year (`review`), which nudges once a year until a new figure is typed or
-the old one confirmed. Changing an amount offers to keep the old price as a
-separate dated row, which is what makes the price history real. A bill can link
-to a debt type instead of carrying its own amount.
+the old one confirmed. `ended` is the last month paid, and it can be behind you
+or ahead: a phone contract with its final month known stays live and counted,
+showing the payments left, then drops out of the totals and the cash flow on its
+own. Changing an amount offers to keep the old price as a separate dated row,
+which is what makes the price history real, and a known final month carries over
+to the new price. A bill can link to a debt type instead of carrying its own
+amount (`billAmount` / `debtDue`): it then pays each debt of that type only while
+the debt still owes something, so a card's repayment stops when the card
+clears, the last payment being only what was left.
 
 **Debts.** A balance is read off a statement and carried forward by `debtNow`:
 the repayments due since come off it and interest goes back on at a twelfth of
 the APR, so a mortgage drops by far less than its repayment. `balanceOn` records
 the day the typed figure was true and the typed figure is never rewritten, so
-retyping from the next statement restarts the projection. A blank APR is treated
+retyping from the next statement restarts the projection. A debt with a balance
+but no date is taken as true today on load, the same rule as the bank balance,
+so nothing entered before dates were kept sits still for ever. The expected
+clear date counts the payments with `debtPayoff` and anchors them on the day the
+funding bill really pays, so it lands in the right month. A blank APR is treated
 as unknown and flagged, because taking the whole repayment off with no interest
 flatters a real debt badly; type 0 for a genuine 0% deal. `rateEnds` records
 when a fixed rate runs out and says so once it has.
