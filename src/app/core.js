@@ -175,6 +175,10 @@ function normalize() {
   });
   m.debts.forEach(d => {
     if (!d.id) d.id = uid();
+    /* The same rule as the bank balance: a figure from before dates were kept is
+       taken as true today, so the repayments start coming off it from now
+       rather than never. Without this, a debt entered earlier would sit still. */
+    if (!d.balanceOn && d.balance !== null && d.balance !== undefined && d.balance !== '') d.balanceOn = C.today();
     if (d.balanceOn === undefined) d.balanceOn = null;
     if (!/^\d{4}-\d{2}$/.test(d.rateEnds || '')) d.rateEnds = null;
   });

@@ -137,6 +137,8 @@ main{padding:2px 12px 20px;max-width:760px;margin:0 auto}
 .row .l{min-width:0;flex:1}
 .row .l b{display:block;overflow-wrap:anywhere;font-weight:700}
 .row .l small,.meta{display:block;color:var(--muted);font-size:12px;line-height:1.4;margin-top:1px}
+/* when small print does wrap, never leave one word stranded on the last line */
+.row .l small,.meta,.note,.muted,.banner,.attnrow span{text-wrap:pretty}
 .empty{color:var(--muted);font-size:13.5px;padding:20px 0;text-align:center}
 
 /* ===================================================================
@@ -315,8 +317,9 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .bar.teal i{background:var(--teal)}.bar.amber i{background:var(--amber)}.bar.coral i{background:var(--coral)}
 .prow{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:9px 0;border-bottom:1px solid var(--line);align-items:center}
 .prow:last-child{border-bottom:0}
-/* the bar and the buttons are grid items of .prow, so they are what has to span */
-.prow .pb,.prow .potact{grid-column:1/-1}
+/* the bar and the buttons are grid items of .prow, so they are what has to span:
+   a wrapped bar via .pb, a bare one (the category breakdown) directly */
+.prow .pb,.prow .potact,.prow > .bar{grid-column:1/-1}
 .potact{display:flex;gap:8px;margin-top:2px}
 .tick{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
 .tick .box{width:28px;height:28px;border-radius:var(--r-xs);border:2px solid var(--fld-brd);flex:0 0 28px;
@@ -836,9 +839,28 @@ const C = (() => {
   }
 
   /* ---------- money ---------- */
-  function billAmount(b, debts) {
-    if (b.link) return debts.filter(d => d.type === b.link).reduce((a, d) => a + num(d.repayment), 0);
+  /* What a bill takes on a given day. A plain bill is its price. A bill linked
+     to a type of debt is the repayments on that debt — but only on debts that
+     still owe something by then, so a card that clears stops being paid for
+     instead of going on costing its repayment every month for ever. Without a
+     day, or a debt with no date to carry from, it is the full repayment, as it
+     always was. */
+  function billAmount(b, debts, on, m, opt) {
+    if (b.link) return r2(debts.filter(d => d.type === b.link).reduce((a, d) => a + debtDue(d, m, on, opt), 0));
     return num(b.amount);
+  }
+  function debtDue(d, m, on, opt) {
+    const pay = num(d.repayment);
+    if (!pay || !on || !m || !d.balanceOn || on <= d.balanceOn) return pay;
+    const before = debtNow(d, m, addDays(on, -1), opt);
+    if (before.balance <= 0) return 0;
+    // the last payment is only what is left, interest included
+    return Math.min(pay, r2(before.balance + r2(before.balance * num(d.apr) / 12)));
+  }
+  // the bill that pays a debt, where there is one, says which day the money leaves
+  function fundingBill(d, m, tod) {
+    return (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
+      && (!b.ended || b.ended >= mkey(tod)) && num(b.dueDay) >= 1) || null;
   }
   function moneyCalc(m, tod, opt) {
     tod = tod || today();
@@ -848,16 +870,42 @@ const C = (() => {
        April, insurance on its renewal month. Nothing can look the new figure up,
        but the app can stop it going stale quietly by asking once a year. */
     const thisKey = mkey(tod);
+    const debtCalc = debts.map(d => {
+      const now = debtNow(d, m, tod, opt);
+      // a fixed rate runs out on a month you already know; after that the figures here are guesswork
+      const rateDue = /^\d{4}-\d{2}$/.test(d.rateEnds || '') && d.rateEnds <= thisKey ? d.rateEnds : null;
+      const payoff = debtPayoff({ ...d, balance: now.balance }, tod);
+      /* The formula counts the payments; the bill that pays the debt says which
+         day they leave, so the clear date lands in the right month rather than a
+         month late whenever the payment day falls later in the month than today. */
+      if (payoff && payoff.months && !payoff.never) {
+        const bill = fundingBill(d, m, tod);
+        const next = bill ? billDates(bill, addDays(tod, 1), addDays(tod, 45), opt)[0] : null;
+        if (next) payoff.date = addMonths(next.date, payoff.months - 1);
+      }
+      return { ...d, balance: now.balance, now, rateDue, payoff };
+    });
     const bills = (m.bills || []).map(b => {
-      const amt = billAmount(b, debts), months = 12 - (b.skip || []).length;
+      const amt = billAmount(b, debts, tod, m, opt), months = 12 - (b.skip || []).length;
+      /* A last-payment month can be behind you (a bill that has finished, or the
+         old price in a history split) or ahead (a phone contract with its final
+         month known). Until it comes the bill is live and counts; after it, the
+         bill drops out on its own. */
+      const finished = !!b.ended && b.ended < thisKey;
+      const left = b.ended && !finished
+        ? billDates(b, addDays(tod, 1), addDays(addMonths(b.ended + '-01', 1), -1), opt).length : null;
+      // a linked bill ends when the last of its debts clears
+      const linked = b.link ? debtCalc.filter(d => d.type === b.link && num(d.repayment)) : null;
+      const clears = linked && linked.length && linked.every(d => d.payoff && d.payoff.date)
+        ? linked.map(d => d.payoff.date).sort().pop() : null;
       const mo = Math.round(num(b.review));
       const due = (mo >= 1 && mo <= 12) && `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` <= thisKey
         ? `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` : null;
       // a bill paid ten months of the year costs less over a year than twelve times its price
-      return { ...b, amt, paidMonths: months, yearly: r2(amt * months),
+      return { ...b, amt, paidMonths: months, yearly: r2(amt * months), finished, left, clears,
         dueReview: due && (!b.reviewedOn || b.reviewedOn < due) ? due : null };
     });
-    const active = bills.filter(b => !b.ended);
+    const active = bills.filter(b => !b.finished);
     const activeTotal = active.reduce((a, b) => a + b.amt, 0);
     const yearTotal = r2(active.reduce((a, b) => a + b.yearly, 0));
     const anySkips = active.some(b => b.paidMonths < 12);
@@ -866,7 +914,8 @@ const C = (() => {
     const months = (m.months || []).map(x => {
       const has = x.earnings !== null && x.earnings !== undefined && x.earnings !== '';
       const out = has ? bills.filter(b => (b.started || '0000-00') <= x.month && (!b.ended || b.ended >= x.month)
-        && !(b.skip || []).includes(+x.month.slice(5, 7))).reduce((a, b) => a + b.amt, 0) : null;
+        && !(b.skip || []).includes(+x.month.slice(5, 7)))
+        .reduce((a, b) => a + (b.link ? billAmount(b, debts, x.month + '-01', m, opt) : b.amt), 0) : null;
       const disp = has ? num(x.earnings) - out : null;
       const pot = has ? Math.max(disp - num(m.buffer), 0) : null;
       return { ...x, has, outgoings: out, disposable: disp, potential: pot, savedN: num(x.saved) };
@@ -881,14 +930,9 @@ const C = (() => {
     const ly = latest ? latest.month.slice(0, 4) : tod.slice(0, 4);
     const yearRow = byYear[ly] || null;
     const thisMonthKey = mkey(tod);
-    const debtCalc = debts.map(d => {
-      const now = debtNow(d, m, tod, opt);
-      // a fixed rate runs out on a month you already know; after that the figures here are guesswork
-      const rateDue = /^\d{4}-\d{2}$/.test(d.rateEnds || '') && d.rateEnds <= thisKey ? d.rateEnds : null;
-      return { ...d, balance: now.balance, now, rateDue, payoff: debtPayoff({ ...d, balance: now.balance }, tod) };
-    });
     const debtTotal = debtCalc.reduce((a, d) => a + num(d.balance), 0);
-    const repayTotal = debts.reduce((a, d) => a + num(d.repayment), 0);
+    // a cleared debt is not costing anything any more
+    const repayTotal = debtCalc.reduce((a, d) => a + (d.now.on && d.balance <= 0 ? 0 : num(d.repayment)), 0);
     const st = debtCalc.filter(d => d.type === 'Short-term');
     const stClear = st.map(d => d.payoff).filter(x => x && x.date).map(x => x.date).sort().pop() || null;
     return { bills, active, activeTotal, yearTotal, anySkips, reviews: active.filter(b => b.dueReview),
@@ -921,9 +965,7 @@ const C = (() => {
     const out = { typed, on, balance: typed, paid: 0, interest: 0, payments: 0,
       carried: false, cleared: false, noRate: false };
     if (!typed || !on || on >= tod || !pay) return out;
-    // a bill funding this kind of debt says which day the money really leaves
-    const bill = (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
-      && !b.ended && num(b.dueDay) >= 1);
+    const bill = fundingBill(d, m, tod);
     const dates = bill
       ? billDates(bill, addDays(on, 1), tod, opt || { shift: 'exact', bankHols: false })
       : (() => { const a = []; for (let i = 1; i <= 240; i++) { const x = addMonths(on, i); if (x > tod) break; a.push({ date: x }); } return a; })();
@@ -983,12 +1025,13 @@ const C = (() => {
     const debts = m.debts || [];
     const out = [];
     (m.bills || []).forEach(b => {
-      const amount = billAmount(b, debts);
-      if (!amount) return;
-      billDates(b, from, to, opt).forEach(d => out.push({
-        date: d.date, nominal: d.nominal, moved: d.moved, why: d.why,
-        name: b.name || 'Bill', category: b.category || 'Other', amount
-      }));
+      const fixed = b.link ? null : num(b.amount);        // a linked bill is worked out per payment
+      if (fixed === 0) return;
+      billDates(b, from, to, opt).forEach(d => {
+        const amount = fixed === null ? billAmount(b, debts, d.date, m, opt) : fixed;
+        if (amount) out.push({ date: d.date, nominal: d.nominal, moved: d.moved, why: d.why,
+          name: b.name || 'Bill', category: b.category || 'Other', amount });
+      });
     });
     return out.sort((a, b) => a.date.localeCompare(b.date) || b.amount - a.amount || a.name.localeCompare(b.name));
   }
@@ -1407,6 +1450,10 @@ function normalize() {
   });
   m.debts.forEach(d => {
     if (!d.id) d.id = uid();
+    /* The same rule as the bank balance: a figure from before dates were kept is
+       taken as true today, so the repayments start coming off it from now
+       rather than never. Without this, a debt entered earlier would sit still. */
+    if (!d.balanceOn && d.balance !== null && d.balance !== undefined && d.balance !== '') d.balanceOn = C.today();
     if (d.balanceOn === undefined) d.balanceOn = null;
     if (!/^\d{4}-\d{2}$/.test(d.rateEnds || '')) d.rateEnds = null;
   });
@@ -1955,20 +2002,21 @@ const VIEWS = {
     }
     if (sec === 'bills') {
     /* --- 4. bills --- */
-    h += `<div class="card"><h2>Bills</h2><div class="row"><div class="l"><b>Active bills total</b><small>${m.active.length} bills · ${m.dated.length} with a payment date${m.anySkips ? ' · ' + C.gbp(m.yearTotal, 0) + ' a year' : ''}</small></div><div class="strong num">${C.gbp(m.activeTotal)}</div></div>
+    h += `<div class="card"><h2>Bills</h2><div class="row"><div class="l"><b>Active bills total</b><small>${m.active.length} bills · ${m.dated.length} with a payment date</small>${
+        m.anySkips ? `<small>${C.gbp(m.yearTotal, 0)} a year, allowing for months off</small>` : ''}</div><div class="strong num">${C.gbp(m.activeTotal)}</div></div>
       ${m.reviews.map(b => `<div class="banner mt12"><b>${esc(b.name || 'A bill')} changes in ${esc(C.MON[b.review - 1])}.</b>
         Check what it has gone to and type the new amount — the old price is kept, so the history still adds up.
         <div class="btnrow"><button class="btn ghost sm" data-act="billChecked" data-id="${esc(b.id)}">Still ${C.gbp(b.amt)}</button></div></div>`).join('')}
       ${ui.editBills ? m.bills.map((b, i) => `<div class="erow">${field('Bill', inp(`money.bills.${i}.name`, b.name, 'text'))}${field('Category', sel(`money.bills.${i}.category`, b.category, CATS))}
           ${field(b.link ? 'Amount (linked to ' + b.link.toLowerCase() + ' debt repayments)' : 'Amount', b.link ? `<input type="text" value="${C.gbp(b.amt)}" disabled>` : inp(`money.bills.${i}.amount`, b.amount))}
           ${field('Day of month it leaves', inp(`money.bills.${i}.dueDay`, b.dueDay, 'number', 'min="1" max="31" step="1" placeholder="1–31"'))}
-          ${field('Started', inp(`money.bills.${i}.started`, b.started, 'month'))}${field('Ended (blank = still paying)', inp(`money.bills.${i}.ended`, b.ended, 'month'))}
+          ${field('Started', inp(`money.bills.${i}.started`, b.started, 'month'))}${field('Last payment (blank = ongoing)', inp(`money.bills.${i}.ended`, b.ended, 'month'))}
           ${field('Price changes in', selPairs(`money.bills.${i}.review`, b.review,
             [{ v: '', l: "Doesn't change" }].concat(C.MON.map((n, k) => ({ v: k + 1, l: n })))))}
           ${b.reviewedOn ? field('Last checked', `<input type="text" value="${esc(C.fmtM(b.reviewedOn))}" disabled>`) : ''}
           <div class="full"><label>Months it is paid${b.paidMonths < 12 ? ` · ${b.paidMonths} of 12` : ''}</label>${monthPicker(i, b.skip)}</div>
           <div class="full"><button class="btn danger sm" data-act="delBill" data-i="${i}">Remove ${esc(b.name || 'bill')}</button></div></div>`).join('') || '<div class="empty">No bills yet.</div>'
-        : m.bills.map(b => `<div class="row"><div class="l"><b>${esc(b.name)}</b><small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}${b.ended ? ' · ended ' + esc(C.fmtM(b.ended)) : ''}${b.link ? ' · linked to debts' : ''}${b.paidMonths < 12 ? ' · ' + b.paidMonths + ' months a year' : ''}</small></div><div class="num ${b.ended ? 'muted' : ''}">${C.gbp(b.amt)}${b.paidMonths < 12 ? `<div class="muted small">${C.gbp(b.yearly, 0)} a year</div>` : ''}</div></div>`).join('') || '<div class="empty">No bills yet.</div>'}
+        : m.bills.map(billRow).join('') || '<div class="empty">No bills yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editBills">${ui.editBills ? 'Done' : 'Edit bills'}</button>${ui.editBills ? '<button class="btn sm" data-act="addBill">Add bill</button>' : ''}</div>
       ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
         return cats.length > 1 ? `<div class="sep"></div><div class="eyebrow">Where it goes each month</div>
@@ -2040,13 +2088,10 @@ const VIEWS = {
           ${field(d.now.on ? `Balance (${C.fmtDM(d.now.on)})` : 'Balance', inp(`money.debts.${i}.balance`, d.now.typed || null))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment))}
           ${field('APR %', pctInp(`money.debts.${i}.apr`, d.apr))}${field('Balance true on', inp(`money.debts.${i}.balanceOn`, d.now.on, 'date'))}
           ${field('Fixed rate ends', inp(`money.debts.${i}.rateEnds`, d.rateEnds, 'month'))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
-        : m.debts.map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b><small>${esc(d.type)} · ${C.gbp(d.repayment)}/month${d.payoff ? d.payoff.never ? ' · repayment below interest' : ' · clear by ' + esc(C.fmtM(d.payoff.date)) + (d.payoff.naive ? ' (no interest)' : '') : ''}${d.now.cleared ? ' · <b class="pos">cleared</b>' : ''}</small></div>
-          <div class="num tr"><b>${C.gbp(d.balance)}</b>${d.now.carried ? `<div class="muted small">${C.gbp(d.now.typed, 0)} on ${esc(C.fmtDM(d.now.on))} · ${d.now.payments} paid · ${
-            d.now.noRate ? '<span class="warn">no APR set</span>' : d.now.interest ? C.gbp(d.now.interest, 0) + ' interest' : 'no interest'}</div>` : ''}</div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'}
+        : m.debts.map(debtRow).join('') || '<div class="empty">No debts. Nice.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editDebts">${ui.editDebts ? 'Done' : 'Edit debts'}</button>${ui.editDebts ? '<button class="btn sm" data-act="addDebt">Add debt</button>' : ''}</div>
-      <div class="note">Nothing moves until you give a balance a date: type one off a statement and the app carries it forward from there, with every repayment due since coming off it and interest going back on at a twelfth of the APR — so a mortgage drops by far less than the repayment, not by the whole of it. Change the rate and any fixed-term reminder is cleared, ready for the new end date. The date it was true is kept underneath, so retype it when the next statement lands and it starts again from there.
-      Repayment dates come from the bill that funds them where there is one, otherwise the same day each month.
-      Clear-by dates count from today. Without an APR they assume no interest — fine for 0% deals, optimistic for a mortgage.</div></div>`;
+      <div class="note">Balances look after themselves: each repayment comes off on the day it leaves, with interest put back on at a twelfth of the APR, so a mortgage drops by far less than its repayment. When a debt clears, its repayment stops leaving too. Retype a balance off a statement to start it again from that day. Change the rate and any fixed-term reminder is cleared, ready for the new end date. 
+      Without an APR there is no interest — right for a 0% deal, badly optimistic for anything else.</div></div>`;
     }
     return { title: 'Money', chart: sec === 'history' ? m.last12 : null, sub: fl.hasBal ? C.gbp(fl.safe, 0) + ' free · ' + (fl.days === 0 ? 'pay day today' : fl.days + ' day' + (fl.days === 1 ? '' : 's') + ' to pay day') : (m.latest ? 'latest: ' + C.fmtM(m.latest.month) : ''), html: h };
   },
@@ -2095,6 +2140,40 @@ function ledgerRow(e, runningBal, gone) {
   return `<div class="lrow${gone ? ' gone' : ''}"><div class="ld"><span>${esc(C.DOW[C.dow(e.date)])}</span>${+e.date.slice(8)}</div>
     <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
     <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
+}
+/* A bill in the list. The amount column holds one figure on every row, so the
+   column lines up down the card; anything worth saying beyond the day it leaves
+   — months off, a final payment coming, a debt it pays — gets a line of its
+   own underneath rather than being run on until it wraps. */
+function billRow(b) {
+  const extra = [];
+  if (b.link) extra.push(`follows your ${esc(b.link.toLowerCase())} debt repayments${b.clears ? ', last one clears ' + esc(C.fmtM(b.clears)) : ''}`);
+  if (b.paidMonths < 12) extra.push(`paid ${b.paidMonths} months a year, ${C.gbp(b.yearly, 0)} a year`);
+  if (b.finished) extra.push(`finished ${esc(C.fmtM(b.ended))}`);
+  else if (b.ended) extra.push(b.left ? `${b.left} payment${b.left === 1 ? '' : 's'} left, last in ${esc(C.fmtM(b.ended))}` : `last payment made, ends ${esc(C.fmtM(b.ended))}`);
+  return `<div class="row"><div class="l"><b>${esc(b.name)}</b>
+    <small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}</small>
+    ${extra.length ? `<small>${extra.join(' · ')}</small>` : ''}</div>
+    <div class="num tr${b.finished ? ' muted' : ''}">${C.gbp(b.amt)}</div></div>`;
+}
+/* A debt. Words on the left, figures on the right, and every line short
+   enough to stay one line on a narrow phone: measured, not guessed, because a
+   mortgage balance makes the figures column wide. */
+function debtRow(d) {
+  const cleared = d.now.cleared || (d.now.on && d.balance <= 0);
+  const status = cleared ? '<b class="pos">Cleared</b>'
+    : !d.payoff ? ''
+    : d.payoff.never ? '<span class="warn">Won\'t clear at this rate</span>'
+    : `Expected clear ${esc(C.fmtM(d.payoff.date))}`;
+  const figures = [];
+  if (!cleared && d.payoff && !d.payoff.never) figures.push(`${d.payoff.months} payment${d.payoff.months === 1 ? '' : 's'} left`);
+  if (d.now.noRate) figures.push('<span class="warn">no APR set</span>');
+  else if (d.now.interest) figures.push(`${C.gbp(d.now.interest, 0)} interest`);
+  return `<div class="row"><div class="l"><b>${esc(d.name)}</b>
+    <small>${esc(d.type)} · ${C.gbp(d.repayment)} a month</small>
+    ${status ? `<small>${status}</small>` : ''}
+    ${d.now.carried ? `<small>From ${C.gbp(d.now.typed, 0)} on ${esc(C.fmtDM(d.now.on))}</small>` : ''}</div>
+    <div class="num tr"><b>${C.gbp(d.balance)}</b>${figures.map(f => `<div class="muted small">${f}</div>`).join('')}</div></div>`;
 }
 /* One thing being saved for, measured against the whole pot. `actions` adds the
    Got it button: Money gets it, Home does not, since the dashboard is for
@@ -2647,7 +2726,7 @@ async function billAmountChanged(i, next) {
   if (!b) return;
   const prev = C.num(b.amount), thisMonth = C.mkey(C.today());
   const worthKeeping = prev && next !== null && C.r2(next) !== C.r2(prev)
-    && b.started && b.started < thisMonth && !b.ended && !b.link;
+    && b.started && b.started < thisMonth && (!b.ended || b.ended >= thisMonth) && !b.link;
   if (b.review) b.reviewedOn = thisMonth;                  // a new price answers this year's check
   if (!worthKeeping) { b.amount = next; commit(`changing ${b.name || 'a bill'}`); return; }
   const up = next > prev, diff = Math.abs(C.r2(next - prev));
@@ -2657,10 +2736,11 @@ async function billAmountChanged(i, next) {
     ok: 'Keep the old price', cancel: 'Just change it'
   });
   // another change event may have handled this bill while the prompt was open
-  if (S.money.bills[i] !== b || C.r2(C.num(b.amount)) !== C.r2(prev) || b.ended) return;
+  if (S.money.bills[i] !== b || C.r2(C.num(b.amount)) !== C.r2(prev) || (b.ended && b.ended < thisMonth)) return;
   if (keep) {
+    const lastMonth = b.ended || null;                 // a known final month carries over to the new price
     b.ended = C.mkey(C.addMonths(thisMonth + '-01', -1));
-    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: null });
+    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth });
     toast(`Old price kept until ${C.fmtM(b.ended)}`);
   } else {
     b.amount = next;

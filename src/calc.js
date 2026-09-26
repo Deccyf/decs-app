@@ -304,9 +304,28 @@ const C = (() => {
   }
 
   /* ---------- money ---------- */
-  function billAmount(b, debts) {
-    if (b.link) return debts.filter(d => d.type === b.link).reduce((a, d) => a + num(d.repayment), 0);
+  /* What a bill takes on a given day. A plain bill is its price. A bill linked
+     to a type of debt is the repayments on that debt — but only on debts that
+     still owe something by then, so a card that clears stops being paid for
+     instead of going on costing its repayment every month for ever. Without a
+     day, or a debt with no date to carry from, it is the full repayment, as it
+     always was. */
+  function billAmount(b, debts, on, m, opt) {
+    if (b.link) return r2(debts.filter(d => d.type === b.link).reduce((a, d) => a + debtDue(d, m, on, opt), 0));
     return num(b.amount);
+  }
+  function debtDue(d, m, on, opt) {
+    const pay = num(d.repayment);
+    if (!pay || !on || !m || !d.balanceOn || on <= d.balanceOn) return pay;
+    const before = debtNow(d, m, addDays(on, -1), opt);
+    if (before.balance <= 0) return 0;
+    // the last payment is only what is left, interest included
+    return Math.min(pay, r2(before.balance + r2(before.balance * num(d.apr) / 12)));
+  }
+  // the bill that pays a debt, where there is one, says which day the money leaves
+  function fundingBill(d, m, tod) {
+    return (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
+      && (!b.ended || b.ended >= mkey(tod)) && num(b.dueDay) >= 1) || null;
   }
   function moneyCalc(m, tod, opt) {
     tod = tod || today();
@@ -316,16 +335,42 @@ const C = (() => {
        April, insurance on its renewal month. Nothing can look the new figure up,
        but the app can stop it going stale quietly by asking once a year. */
     const thisKey = mkey(tod);
+    const debtCalc = debts.map(d => {
+      const now = debtNow(d, m, tod, opt);
+      // a fixed rate runs out on a month you already know; after that the figures here are guesswork
+      const rateDue = /^\d{4}-\d{2}$/.test(d.rateEnds || '') && d.rateEnds <= thisKey ? d.rateEnds : null;
+      const payoff = debtPayoff({ ...d, balance: now.balance }, tod);
+      /* The formula counts the payments; the bill that pays the debt says which
+         day they leave, so the clear date lands in the right month rather than a
+         month late whenever the payment day falls later in the month than today. */
+      if (payoff && payoff.months && !payoff.never) {
+        const bill = fundingBill(d, m, tod);
+        const next = bill ? billDates(bill, addDays(tod, 1), addDays(tod, 45), opt)[0] : null;
+        if (next) payoff.date = addMonths(next.date, payoff.months - 1);
+      }
+      return { ...d, balance: now.balance, now, rateDue, payoff };
+    });
     const bills = (m.bills || []).map(b => {
-      const amt = billAmount(b, debts), months = 12 - (b.skip || []).length;
+      const amt = billAmount(b, debts, tod, m, opt), months = 12 - (b.skip || []).length;
+      /* A last-payment month can be behind you (a bill that has finished, or the
+         old price in a history split) or ahead (a phone contract with its final
+         month known). Until it comes the bill is live and counts; after it, the
+         bill drops out on its own. */
+      const finished = !!b.ended && b.ended < thisKey;
+      const left = b.ended && !finished
+        ? billDates(b, addDays(tod, 1), addDays(addMonths(b.ended + '-01', 1), -1), opt).length : null;
+      // a linked bill ends when the last of its debts clears
+      const linked = b.link ? debtCalc.filter(d => d.type === b.link && num(d.repayment)) : null;
+      const clears = linked && linked.length && linked.every(d => d.payoff && d.payoff.date)
+        ? linked.map(d => d.payoff.date).sort().pop() : null;
       const mo = Math.round(num(b.review));
       const due = (mo >= 1 && mo <= 12) && `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` <= thisKey
         ? `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` : null;
       // a bill paid ten months of the year costs less over a year than twelve times its price
-      return { ...b, amt, paidMonths: months, yearly: r2(amt * months),
+      return { ...b, amt, paidMonths: months, yearly: r2(amt * months), finished, left, clears,
         dueReview: due && (!b.reviewedOn || b.reviewedOn < due) ? due : null };
     });
-    const active = bills.filter(b => !b.ended);
+    const active = bills.filter(b => !b.finished);
     const activeTotal = active.reduce((a, b) => a + b.amt, 0);
     const yearTotal = r2(active.reduce((a, b) => a + b.yearly, 0));
     const anySkips = active.some(b => b.paidMonths < 12);
@@ -334,7 +379,8 @@ const C = (() => {
     const months = (m.months || []).map(x => {
       const has = x.earnings !== null && x.earnings !== undefined && x.earnings !== '';
       const out = has ? bills.filter(b => (b.started || '0000-00') <= x.month && (!b.ended || b.ended >= x.month)
-        && !(b.skip || []).includes(+x.month.slice(5, 7))).reduce((a, b) => a + b.amt, 0) : null;
+        && !(b.skip || []).includes(+x.month.slice(5, 7)))
+        .reduce((a, b) => a + (b.link ? billAmount(b, debts, x.month + '-01', m, opt) : b.amt), 0) : null;
       const disp = has ? num(x.earnings) - out : null;
       const pot = has ? Math.max(disp - num(m.buffer), 0) : null;
       return { ...x, has, outgoings: out, disposable: disp, potential: pot, savedN: num(x.saved) };
@@ -349,14 +395,9 @@ const C = (() => {
     const ly = latest ? latest.month.slice(0, 4) : tod.slice(0, 4);
     const yearRow = byYear[ly] || null;
     const thisMonthKey = mkey(tod);
-    const debtCalc = debts.map(d => {
-      const now = debtNow(d, m, tod, opt);
-      // a fixed rate runs out on a month you already know; after that the figures here are guesswork
-      const rateDue = /^\d{4}-\d{2}$/.test(d.rateEnds || '') && d.rateEnds <= thisKey ? d.rateEnds : null;
-      return { ...d, balance: now.balance, now, rateDue, payoff: debtPayoff({ ...d, balance: now.balance }, tod) };
-    });
     const debtTotal = debtCalc.reduce((a, d) => a + num(d.balance), 0);
-    const repayTotal = debts.reduce((a, d) => a + num(d.repayment), 0);
+    // a cleared debt is not costing anything any more
+    const repayTotal = debtCalc.reduce((a, d) => a + (d.now.on && d.balance <= 0 ? 0 : num(d.repayment)), 0);
     const st = debtCalc.filter(d => d.type === 'Short-term');
     const stClear = st.map(d => d.payoff).filter(x => x && x.date).map(x => x.date).sort().pop() || null;
     return { bills, active, activeTotal, yearTotal, anySkips, reviews: active.filter(b => b.dueReview),
@@ -389,9 +430,7 @@ const C = (() => {
     const out = { typed, on, balance: typed, paid: 0, interest: 0, payments: 0,
       carried: false, cleared: false, noRate: false };
     if (!typed || !on || on >= tod || !pay) return out;
-    // a bill funding this kind of debt says which day the money really leaves
-    const bill = (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
-      && !b.ended && num(b.dueDay) >= 1);
+    const bill = fundingBill(d, m, tod);
     const dates = bill
       ? billDates(bill, addDays(on, 1), tod, opt || { shift: 'exact', bankHols: false })
       : (() => { const a = []; for (let i = 1; i <= 240; i++) { const x = addMonths(on, i); if (x > tod) break; a.push({ date: x }); } return a; })();
@@ -451,12 +490,13 @@ const C = (() => {
     const debts = m.debts || [];
     const out = [];
     (m.bills || []).forEach(b => {
-      const amount = billAmount(b, debts);
-      if (!amount) return;
-      billDates(b, from, to, opt).forEach(d => out.push({
-        date: d.date, nominal: d.nominal, moved: d.moved, why: d.why,
-        name: b.name || 'Bill', category: b.category || 'Other', amount
-      }));
+      const fixed = b.link ? null : num(b.amount);        // a linked bill is worked out per payment
+      if (fixed === 0) return;
+      billDates(b, from, to, opt).forEach(d => {
+        const amount = fixed === null ? billAmount(b, debts, d.date, m, opt) : fixed;
+        if (amount) out.push({ date: d.date, nominal: d.nominal, moved: d.moved, why: d.why,
+          name: b.name || 'Bill', category: b.category || 'Other', amount });
+      });
     });
     return out.sort((a, b) => a.date.localeCompare(b.date) || b.amount - a.amount || a.name.localeCompare(b.name));
   }

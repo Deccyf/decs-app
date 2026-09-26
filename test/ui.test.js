@@ -1228,7 +1228,7 @@ test('a debt balance is typed once and carries itself forward', skip, async t =>
   const c = (await later.$$eval('#view .card', cs => cs.map(x => x.textContent.replace(/\s+/g, ' '))))
     .find(x => x.includes('Total owed'));
   assert.match(c, /£1,342\.13/, '£600 paid, £92.13 of interest');
-  assert.match(c, /£1,850 on 05 Jun · 3 paid/, 'with the figure you typed kept underneath');
+  assert.match(c, /From £1,850 on 05 Jun/, 'with the figure you typed kept underneath');
   assert.match(c, /Total owed.*£1,342\.13/, 'and the total follows it');
   assert.equal(await later.evaluate(() => JSON.parse(localStorage.getItem('decs-stuff-v1')).money.debts[0].balance), 1850,
     'the typed figure itself is never quietly rewritten');
@@ -1290,7 +1290,9 @@ test('the mortgage shows what interest did to it, not just the repayment', skip,
     .find(c => c.includes('Total owed'));
   const c = await card();
   assert.match(c, /£196,719\.06/, 'three payments and three months of interest');
-  assert.match(c, /£197,572 on 10 Jan · 3 paid · £2,022 interest/, 'and it says so on the row');
+  assert.match(c, /From £197,572 on 10 Jan/, 'where it was carried from');
+  assert.match(c, /£2,022 interest/, 'and what interest did, on the row');
+  assert.match(c, /Expected clear/, 'with the date it should be gone by');
   assert.ok(!/£194,696/.test(c), 'never the full repayment coming off');
   assert.doesNotMatch(c, /no APR/, 'the rate is set, so nothing to warn about');
   assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /fixed rate ended/, 'the fix still has years to run');
@@ -1500,4 +1502,65 @@ test('the payslip card sits together properly', skip, async t => {
   assert.equal(geo.extraLeft - geo.cardLeft, 1, 'and bleeding to both edges');
   assert.equal(geo.cardRight - geo.extraRight, 1);
   assert.ok(geo.labelHeight < 24, `the field label fits one line (${geo.labelHeight}px)`);
+});
+
+test('bills line their amounts up, and say the extra on a line of its own', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [
+    { id: 'c', name: 'Council Tax', category: 'Housing', amount: 180, dueDay: 15, started: '2024-01', skip: [2, 3] },
+    { id: 'w', name: 'Water', category: 'Utilities', amount: 61.8, dueDay: 15, started: '2024-01' },
+    { id: 'e', name: 'EE Device', category: 'Phone', amount: 34.5, dueDay: 21, started: '2025-04', ended: '2027-03' }];
+  const page = await open(t, { on: '2026-09-26', data, tab: 'money', sec: 'bills' });
+  const rows = await page.$$eval('#view .card .row', rs => rs.filter(r => r.querySelector('.num') && r.querySelector('b'))
+    .map(r => ({ name: r.querySelector('b').textContent.trim(), right: Math.round(r.querySelector('.num').getBoundingClientRect().right),
+      amountLines: r.querySelector('.num').children.length, text: r.textContent.replace(/\s+/g, ' ') })));
+  const billRows = rows.filter(r => ['Council Tax', 'Water', 'EE Device'].includes(r.name));
+  assert.equal(new Set(billRows.map(r => r.right)).size, 1, 'every amount ends in the same place');
+  assert.ok(billRows.every(r => r.amountLines === 0), 'one figure per row, nothing stacked under it');
+  assert.match(billRows[0].text, /paid 10 months a year, £1,800 a year/);
+  assert.match(billRows[2].text, /6 payments left, last in Mar 2027/);
+
+  // and the category bars run the full width whatever the figure beside them
+  const widths = await page.$$eval('#view .card .prow > .bar', bs => bs.map(b => Math.round(b.getBoundingClientRect().width)));
+  assert.ok(widths.length > 1);
+  assert.equal(new Set(widths).size, 1, `bars all one width, got ${[...new Set(widths)].join(', ')}`);
+});
+
+test('a debt says when it is expected to clear, and every line fits', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [{ id: 'cc', name: 'Credit cards', category: 'Debt', amount: null, dueDay: 5, started: '2024-01', link: 'Short-term' }];
+  data.money.debts = [
+    { id: 'd1', name: 'Barclaycard', type: 'Short-term', balance: 1000, repayment: 200, apr: 0.219 },
+    { id: 'd3', name: 'Mortgage', type: 'Long-term', balance: 197572.08, repayment: 958.41, apr: 0.041 }];
+  const page = await open(t, { on: '2026-09-26', data, tab: 'money', sec: 'saving' });
+  assert.deepEqual(await stored(page).then(s => s.money.debts.map(d => d.balanceOn)), ['2026-09-26', '2026-09-26'],
+    'debts entered before dates were kept start carrying from today');
+  const card = (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' ')))).find(c => c.includes('Total owed'));
+  assert.match(card, /Barclaycard.*Expected clear Mar 2027/);
+  assert.match(card, /6 payments left/);
+  const wraps = await page.$$eval('#view .card:has(h2:text-is("Debt")) .row small, #view .card:has(h2:text-is("Debt")) .row .num .small', ss => ss
+    .map(s => ({ t: s.textContent.trim(), n: Math.round(s.getBoundingClientRect().height / parseFloat(getComputedStyle(s).lineHeight)) }))
+    .filter(x => x.n > 1));
+  assert.deepEqual(wraps, [], 'no debt line wraps');
+
+  // the linked bill follows it, and knows when it stops
+  await page.click('[data-act="moneyTab"][data-v="bills"]'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('#view', e => e.textContent), /follows your short-term debt repayments, last one clears Mar 2027/);
+});
+
+test('changing the price of a bill with a known end keeps the end', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [{ id: 'e', name: 'EE Device', category: 'Phone', amount: 34.5, dueDay: 21, started: '2025-04', ended: '2027-03' }];
+  const page = await open(t, { on: '2026-09-26', data, tab: 'money', sec: 'bills' });
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  assert.match(await page.$eval('#view', e => e.textContent), /Last payment \(blank = ongoing\)/);
+  await page.fill('[data-set="money.bills.0.amount"]', '36');
+  await page.dispatchEvent('[data-set="money.bills.0.amount"]', 'change'); await page.waitForTimeout(350);
+  assert.match(await page.$eval('#dlgForm', e => e.textContent), /EE Device has gone up/, 'a live bill with an end still offers the history');
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(400);
+  while (await page.$eval('#dlg', e => e.open)) { await page.click('#dlgForm button[value="cancel"]'); await page.waitForTimeout(300); }
+  const b = await stored(page).then(s => s.money.bills);
+  assert.equal(b.length, 2);
+  assert.deepEqual([b[0].amount, b[0].ended], [34.5, '2026-08'], 'the old price ends last month');
+  assert.deepEqual([b[1].amount, b[1].started, b[1].ended], [36, '2026-09', '2027-03'], 'the new one keeps the real last month');
 });

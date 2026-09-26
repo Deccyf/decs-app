@@ -4,6 +4,40 @@ function ledgerRow(e, runningBal, gone) {
     <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
     <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
 }
+/* A bill in the list. The amount column holds one figure on every row, so the
+   column lines up down the card; anything worth saying beyond the day it leaves
+   — months off, a final payment coming, a debt it pays — gets a line of its
+   own underneath rather than being run on until it wraps. */
+function billRow(b) {
+  const extra = [];
+  if (b.link) extra.push(`follows your ${esc(b.link.toLowerCase())} debt repayments${b.clears ? ', last one clears ' + esc(C.fmtM(b.clears)) : ''}`);
+  if (b.paidMonths < 12) extra.push(`paid ${b.paidMonths} months a year, ${C.gbp(b.yearly, 0)} a year`);
+  if (b.finished) extra.push(`finished ${esc(C.fmtM(b.ended))}`);
+  else if (b.ended) extra.push(b.left ? `${b.left} payment${b.left === 1 ? '' : 's'} left, last in ${esc(C.fmtM(b.ended))}` : `last payment made, ends ${esc(C.fmtM(b.ended))}`);
+  return `<div class="row"><div class="l"><b>${esc(b.name)}</b>
+    <small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}</small>
+    ${extra.length ? `<small>${extra.join(' · ')}</small>` : ''}</div>
+    <div class="num tr${b.finished ? ' muted' : ''}">${C.gbp(b.amt)}</div></div>`;
+}
+/* A debt. Words on the left, figures on the right, and every line short
+   enough to stay one line on a narrow phone: measured, not guessed, because a
+   mortgage balance makes the figures column wide. */
+function debtRow(d) {
+  const cleared = d.now.cleared || (d.now.on && d.balance <= 0);
+  const status = cleared ? '<b class="pos">Cleared</b>'
+    : !d.payoff ? ''
+    : d.payoff.never ? '<span class="warn">Won\'t clear at this rate</span>'
+    : `Expected clear ${esc(C.fmtM(d.payoff.date))}`;
+  const figures = [];
+  if (!cleared && d.payoff && !d.payoff.never) figures.push(`${d.payoff.months} payment${d.payoff.months === 1 ? '' : 's'} left`);
+  if (d.now.noRate) figures.push('<span class="warn">no APR set</span>');
+  else if (d.now.interest) figures.push(`${C.gbp(d.now.interest, 0)} interest`);
+  return `<div class="row"><div class="l"><b>${esc(d.name)}</b>
+    <small>${esc(d.type)} · ${C.gbp(d.repayment)} a month</small>
+    ${status ? `<small>${status}</small>` : ''}
+    ${d.now.carried ? `<small>From ${C.gbp(d.now.typed, 0)} on ${esc(C.fmtDM(d.now.on))}</small>` : ''}</div>
+    <div class="num tr"><b>${C.gbp(d.balance)}</b>${figures.map(f => `<div class="muted small">${f}</div>`).join('')}</div></div>`;
+}
 /* One thing being saved for, measured against the whole pot. `actions` adds the
    Got it button: Money gets it, Home does not, since the dashboard is for
    reading and money is moved where the savings live. */

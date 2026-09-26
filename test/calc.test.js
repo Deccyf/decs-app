@@ -920,3 +920,58 @@ test('it asks about one pay day at a time, the nearest one', () => {
   assert.equal(p.needsPayslip.payday, '2026-09-25');
   assert.equal(C.payCalc(pay(), '2026-10-21').needsPayslip.payday, '2026-10-23', 'then the next one');
 });
+
+/* ------------------------------------------------- things that end on their own -- */
+const EE = { id: 'e', name: 'EE Device', amount: 34.5, dueDay: 21, started: '2025-04', ended: '2027-03' };
+
+test('a bill with its last payment still to come counts until then', () => {
+  const r = C.moneyCalc(bills(EE), '2026-09-26', OPT);
+  assert.equal(r.bills[0].finished, false, 'the end is in March, so it is live now');
+  assert.equal(r.active.length, 1, 'and in the active total');
+  assert.equal(r.activeTotal, 34.5);
+  assert.equal(r.bills[0].left, 6, 'October to March');
+});
+
+test('and drops out on its own once its last month has gone', () => {
+  const mar = C.moneyCalc(bills(EE), '2027-03-10', OPT);
+  assert.equal(mar.bills[0].finished, false, 'still live in its final month');
+  assert.equal(mar.bills[0].left, 1, 'with one payment to go');
+  const apr = C.moneyCalc(bills(EE), '2027-04-10', OPT);
+  assert.equal(apr.bills[0].finished, true);
+  assert.equal(apr.active.length, 0, 'out of the total');
+  assert.equal(C.billEvents(bills(EE), '2027-04-01', '2027-12-31', OPT).length, 0, 'and out of the cash flow');
+});
+
+test('a card that clears stops being paid for', () => {
+  const m = { months: [], bills: [{ id: 'cc', name: 'Credit cards', dueDay: 5, started: '2024-01', link: 'Short-term' }],
+    debts: [{ id: 'd1', name: 'Barclaycard', type: 'Short-term', balance: 1000, repayment: 200, apr: 0.219, balanceOn: '2026-09-26' }] };
+  const ev = C.billEvents(m, '2026-09-27', '2027-12-31', OPT);
+  assert.equal(ev.length, 6, 'six payments and no more');
+  assert.deepEqual(ev.slice(0, 5).map(e => e.amount), [200, 200, 200, 200, 200]);
+  assert.ok(ev[5].amount < 200 && ev[5].amount > 0, `the last one is only what was left: £${ev[5].amount}`);
+
+  const r = C.moneyCalc(m, '2026-09-26', OPT);
+  assert.equal(r.debts[0].payoff.months, 6);
+  assert.equal(r.debts[0].payoff.date.slice(0, 7), '2027-03', 'expected clear in March');
+  assert.equal(r.bills[0].clears.slice(0, 7), '2027-03', 'and the linked bill knows when it stops');
+
+  const after = C.moneyCalc(m, '2027-04-10', OPT);
+  assert.equal(after.debts[0].balance, 0, 'cleared by April');
+  assert.equal(after.bills[0].amt, 0, 'so the bill costs nothing now');
+  assert.equal(after.repayTotal, 0, 'and neither do the repayments');
+});
+
+test('a card without a date to carry from is paid in full, as before', () => {
+  const m = { months: [], bills: [{ id: 'cc', name: 'Credit cards', dueDay: 5, started: '2024-01', link: 'Short-term' }],
+    debts: [{ id: 'd1', name: 'Barclaycard', type: 'Short-term', balance: 1000, repayment: 200, apr: 0.219, balanceOn: null }] };
+  assert.equal(C.billEvents(m, '2026-09-27', '2027-12-31', OPT).length, 15, 'every month, no end');
+});
+
+test('the expected clear date lands in the month the last payment really leaves', () => {
+  // paid on the 28th: from the 26th the next payment is two days away, not a month
+  const m = { months: [], bills: [{ id: 'cc', name: 'Card', dueDay: 28, started: '2024-01', link: 'Short-term' }],
+    debts: [{ id: 'd1', name: 'Card', type: 'Short-term', balance: 400, repayment: 200, apr: 0, balanceOn: '2026-09-26' }] };
+  const r = C.moneyCalc(m, '2026-09-26', OPT);
+  assert.equal(r.debts[0].payoff.months, 2);
+  assert.equal(r.debts[0].payoff.date.slice(0, 7), '2026-10', '28 Sep and 28 Oct, so October, not November');
+});

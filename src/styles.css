@@ -123,6 +123,8 @@ main{padding:2px 12px 20px;max-width:760px;margin:0 auto}
 .row .l{min-width:0;flex:1}
 .row .l b{display:block;overflow-wrap:anywhere;font-weight:700}
 .row .l small,.meta{display:block;color:var(--muted);font-size:12px;line-height:1.4;margin-top:1px}
+/* when small print does wrap, never leave one word stranded on the last line */
+.row .l small,.meta,.note,.muted,.banner,.attnrow span{text-wrap:pretty}
 .empty{color:var(--muted);font-size:13.5px;padding:20px 0;text-align:center}
 
 /* ===================================================================
@@ -301,8 +303,9 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .bar.teal i{background:var(--teal)}.bar.amber i{background:var(--amber)}.bar.coral i{background:var(--coral)}
 .prow{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:9px 0;border-bottom:1px solid var(--line);align-items:center}
 .prow:last-child{border-bottom:0}
-/* the bar and the buttons are grid items of .prow, so they are what has to span */
-.prow .pb,.prow .potact{grid-column:1/-1}
+/* the bar and the buttons are grid items of .prow, so they are what has to span:
+   a wrapped bar via .pb, a bare one (the category breakdown) directly */
+.prow .pb,.prow .potact,.prow > .bar{grid-column:1/-1}
 .potact{display:flex;gap:8px;margin-top:2px}
 .tick{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
 .tick .box{width:28px;height:28px;border-radius:var(--r-xs);border:2px solid var(--fld-brd);flex:0 0 28px;

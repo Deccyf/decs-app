@@ -1,5 +1,5 @@
 /* Dec's Tracker — offline cache. Bump V whenever index.html changes. */
-const V = 'decs-tracker-v32';
+const V = 'decs-tracker-v33';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 const NET_TIMEOUT = 2500;
 

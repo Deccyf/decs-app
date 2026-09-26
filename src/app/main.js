@@ -281,7 +281,7 @@ async function billAmountChanged(i, next) {
   if (!b) return;
   const prev = C.num(b.amount), thisMonth = C.mkey(C.today());
   const worthKeeping = prev && next !== null && C.r2(next) !== C.r2(prev)
-    && b.started && b.started < thisMonth && !b.ended && !b.link;
+    && b.started && b.started < thisMonth && (!b.ended || b.ended >= thisMonth) && !b.link;
   if (b.review) b.reviewedOn = thisMonth;                  // a new price answers this year's check
   if (!worthKeeping) { b.amount = next; commit(`changing ${b.name || 'a bill'}`); return; }
   const up = next > prev, diff = Math.abs(C.r2(next - prev));
@@ -291,10 +291,11 @@ async function billAmountChanged(i, next) {
     ok: 'Keep the old price', cancel: 'Just change it'
   });
   // another change event may have handled this bill while the prompt was open
-  if (S.money.bills[i] !== b || C.r2(C.num(b.amount)) !== C.r2(prev) || b.ended) return;
+  if (S.money.bills[i] !== b || C.r2(C.num(b.amount)) !== C.r2(prev) || (b.ended && b.ended < thisMonth)) return;
   if (keep) {
+    const lastMonth = b.ended || null;                 // a known final month carries over to the new price
     b.ended = C.mkey(C.addMonths(thisMonth + '-01', -1));
-    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: null });
+    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth });
     toast(`Old price kept until ${C.fmtM(b.ended)}`);
   } else {
     b.amount = next;
