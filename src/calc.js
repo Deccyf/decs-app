@@ -23,10 +23,12 @@ const C = (() => {
   const fmtM = k => `${MON[+k.slice(5, 7) - 1]} ${k.slice(0, 4)}`;
   const fmtMs = k => `${MON[+k.slice(5, 7) - 1]} ${k.slice(2, 4)}`;
   const ord = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+  // made once and kept: toLocaleString with options builds a new formatter for every figure on the page
+  const nfs = {};
+  const nf = dp => nfs[dp] || (nfs[dp] = new Intl.NumberFormat('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp }));
   const gbp = (v, dp = 2) => {
     if (v === null || v === undefined || v === '' || isNaN(v)) return '–';
-    const a = Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
-    return (v < 0 ? '-£' : '£') + a;
+    return (v < 0 ? '-£' : '£') + nf(dp).format(Math.abs(v));
   };
   const pct = v => (v === null || v === undefined || isNaN(v)) ? '–' : Math.round(v * 100) + '%';
   /* An interest rate is not a savings percentage: 4.1% rounded to 4% is a
@@ -83,40 +85,51 @@ const C = (() => {
 
   /* ---------- pay ---------- */
   const TAXKEYS = ['personalAllowance', 'basicRate', 'basicBand', 'higherRate', 'higherBand', 'addRate', 'niPT', 'niUEL', 'niMain', 'niUpper'];
-  const TAXDEF = { personalAllowance: 12570, basicRate: 0.2, basicBand: 37700, higherRate: 0.4, higherBand: 125140,
+  // the allowance is the tax code's number × 10 + 9, which is what HMRC's own tables use: 1257L is 12,579
+  const TAXDEF = { personalAllowance: 12579, basicRate: 0.2, basicBand: 37700, higherRate: 0.4, higherBand: 125140,
     addRate: 0.45, niPT: 12570, niUEL: 50270, niMain: 0.08, niUpper: 0.02 };
+  // the 6 April a day's tax year started on
+  const aprilStart = day => { const y = +day.slice(0, 4); return day >= `${y}-04-06` ? `${y}-04-06` : `${y - 1}-04-06`; };
+  // a real day: 2026-02-31 would otherwise quietly become 3 March, and 2026-13-01 throws
+  const isDate = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(i2d(s)) && d2i(i2d(s)) === s;
+  const isMonth = s => typeof s === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(s);
   function payCalc(p, tod) {
     tod = tod || today();
-    const t = p.tax;
-    const basic = r2(num(p.salary) / num(p.weeksYear) * 4);
-    const hourly = r2(num(p.salary) / num(p.weeksYear) / num(p.hoursWeek));
-    const rises = (p.rises || []).filter(x => x.from && num(x.salary) > 0).slice().sort((a, b) => a.from.localeCompare(b.from));
-    // salary actually in payment on a given day of a given pay period; a rise with a backpay date
-    // only enters normal pay from that pay day (the shortfall before it is paid as backpay)
-    const salaryOn = (day, payday, force) => {
-      let s = num(p.salary);
-      rises.forEach(r => { const live = r === force || !r.arrearsOn || payday >= r.arrearsOn; if (live && day >= r.from) s = num(r.salary); });
-      return s;
+    const t = p.tax || {};
+    const blank = v => v === null || v === undefined || v === '';
+    /* A cleared box must not take the whole tab down with it: no hours made the
+       hourly rate Infinity and every figure NaN, and no pay day threw. Each falls
+       back to what a fresh install starts with. */
+    const weeks = num(p.weeksYear) || 52.1667, hoursWk = num(p.hoursWeek) || 35;
+    const ped = blank(p.periodEndDays) ? 6 : num(p.periodEndDays);
+    // idx is the rise's place in the list as typed, which is what the settings edit
+    const rises = (p.rises || []).map((x, idx) => x && isDate(x.from) && num(x.salary) > 0 ? Object.assign({}, x, { idx }) : null)
+      .filter(Boolean).sort((a, b) => a.from.localeCompare(b.from));
+    /* The salary in payment across a pay period. A rise with a backpay date only
+       enters normal pay from that pay day — the shortfall before it is paid as
+       backpay — unless it is in `forced`, which is how that shortfall is measured.
+       Worked from the dates the salary changes on rather than day by day. */
+    const avgSalary = (start, payday, forced) => {
+      const end = addDays(start, 28);
+      let s = num(p.salary), d = start, total = 0;
+      rises.forEach(r => {
+        if (r.arrearsOn && payday < r.arrearsOn && !(forced && forced.has(r))) return;
+        if (r.from >= end) return;
+        if (r.from > d) { total += s * daysBetween(d, r.from); d = r.from; }
+        s = num(r.salary);
+      });
+      return (total + s * daysBetween(d, end)) / 28;
     };
-    const avgSalary = (start, payday, force) => {
-      let t = 0; for (let i = 0; i < 28; i++) t += salaryOn(addDays(start, i), payday, force);
-      return t / 28;
-    };
-    const basicOf = sal => r2(sal / num(p.weeksYear) * 4);
-    const hourlyOf = sal => r2(sal / num(p.weeksYear) / num(p.hoursWeek));
+    const basicOf = sal => r2(sal / weeks * 4);
+    const hourlyOf = sal => r2(sal / weeks / hoursWk);
     // fixed items can have a start and an end; a period is charged for the days the item was in force
     const itemsOn = start => {
-      const out = { allow: 0, sacr: 0, after: 0 };
+      const out = { allow: 0, sacr: 0, after: 0 }, last = addDays(start, 27);
       (p.fixed || []).forEach(it => {
-        const amt = num(it.amount);
-        if (!amt || !it.name) return;
-        let days = 0;
-        for (let i = 0; i < 28; i++) {
-          const day = addDays(start, i);
-          if (it.from && day < it.from) continue;
-          if (it.to && day > it.to) continue;
-          days++;
-        }
+        const amt = it ? num(it.amount) : 0;
+        if (!amt) return;                    // named or not, an amount is an amount
+        const a = it.from && it.from > start ? it.from : start, b = it.to && it.to < last ? it.to : last;
+        const days = a <= b ? daysBetween(a, b) + 1 : 0;
         if (!days) return;
         const v = amt * days / 28;
         if (it.treatment === 'Allowance') out.allow += v;
@@ -129,8 +142,8 @@ const C = (() => {
     /* A blank rate must never read as zero — num() would turn a cleared basic
        rate into 0% tax and overstate net pay by hundreds. Fall back to the last
        year that had a figure, then to HMRC's published defaults. */
-    const blank = v => v === null || v === undefined || v === '';
-    const years = (p.taxYears && p.taxYears.length ? p.taxYears : [Object.assign({ from: t.taxYearStart, personalAllowance: p.personalAllowance }, t)])
+    const listed = (p.taxYears || []).filter(y => y && typeof y === 'object');
+    const years = (listed.length ? listed : [Object.assign({ from: t.taxYearStart, personalAllowance: p.personalAllowance }, t)])
       .slice().sort((a, b) => String(a.from).localeCompare(String(b.from)))
       .map((y, i, arr) => {
         const out = Object.assign({}, y);
@@ -142,8 +155,6 @@ const C = (() => {
         return out;
       });
     const ratesOn = day => { let e = years[0]; years.forEach(x => { if (day >= x.from) e = x; }); return e; };
-    // 6 April boundary the pay day belongs to
-    const aprilStart = day => { const y = +day.slice(0, 4); return day >= `${y}-04-06` ? `${y}-04-06` : `${y - 1}-04-06`; };
     // HMRC method: free pay and bands proportioned to the tax week, taxable pay floored to whole pounds
     const taxOn = (cum, wk, e) => {
       const free = Math.round(num(e.personalAllowance) * wk / 52 * 100) / 100;
@@ -163,25 +174,31 @@ const C = (() => {
     const nowRates = ratesOn(tod);
     const paye = x => taxOn(x, 4, nowRates);
     const ni = x => niOn(x, nowRates);
-    const ped = num(p.periodEndDays);
     /* The stored pay day is an anchor — roll it on in 28-day steps so the
        schedule never goes stale. Pay day itself counts as gone: BACS credits
        land in the small hours, so by the time anyone opens this the money is in
        and the pay day worth showing is the one four weeks out. */
-    let next = p.nextPayDay;
-    while (next <= tod) next = addDays(next, 28);
-    while (addDays(next, -28) > tod) next = addDays(next, -28);
-    // schedule spans this year plus the next four; last year is kept only while its EU holiday pay
-    // is still an estimate — once you record what you were paid, that year drops off
+    const anchor = isDate(p.nextPayDay) ? p.nextPayDay : tod;
+    const next = addDays(anchor, 28 * (Math.floor(daysBetween(anchor, tod) / 28) + 1));
+    const onOrAfter = d => addDays(next, 28 * Math.ceil(daysBetween(next, d) / 28));
+    /* What is shown: this year plus the next four, and last year only while its
+       EU holiday pay is still an estimate — once what was paid is recorded, that
+       year drops off. But never less than the whole of the current tax year,
+       whose totals are on screen: recording last year's figure in March used to
+       cut the year down to its last three pay days. */
     const prevYear = +tod.slice(0, 4) - 1;
-    const prevDone = (p.hpaHistory || {})[String(prevYear)] != null && (p.hpaHistory || {})[String(prevYear)] !== '';
+    const prevDone = !blank((p.hpaHistory || {})[String(prevYear)]);
     const Y0 = prevDone ? prevYear + 1 : prevYear, YEND = +tod.slice(0, 4) + 4;
-    let first = next;
-    while (+addDays(first, -ped).slice(0, 4) >= Y0) first = addDays(first, -28);
-    first = addDays(first, 28);
+    const hpaFrom = onOrAfter(addDays(`${Y0}-01-01`, ped));
+    const taxFrom = onOrAfter(aprilStart(tod));
+    const shownFrom = hpaFrom < taxFrom ? hpaFrom : taxFrom;
+    /* Cumulative tax needs the tax year from its first pay day, so a schedule
+       starting in January works out April to December too, then leaves those
+       pay days out of what it returns. */
+    const calcFrom = onOrAfter(aprilStart(shownFrom));
     const rows = [];
-    for (let i = 0; i < 90; i++) {
-      const payday = addDays(first, 28 * i);
+    for (let i = 0; i < 120; i++) {
+      const payday = addDays(calcFrom, 28 * i);
       const end = addDays(payday, -ped), start = addDays(end, -27);
       if (+end.slice(0, 4) > YEND) break;
       const h = (p.hours && p.hours[payday]) || {};
@@ -193,15 +210,19 @@ const C = (() => {
       rows.push({ payday, start, end, ot, sun, otPay, sunPay, basic: rowBasic, hourly: rowHourly, salary: sal,
         allow: fix.allow, sacr: fix.sacr, after: fix.after,
         refYear: end.slice(0, 4), taxYear: aprilStart(payday), rates: ratesOn(payday), hpaPay: 0, backpay: 0, backpayOt: 0,
-        past: payday <= tod, next: payday === next });
+        past: payday <= tod, next: payday === next, warm: payday < shownFrom });
     }
     // backpay: for a rise with a backpay date, the shortfall on every period between the effective date and that pay day
-    const riseCalc = rises.map(r => {
-      const out = { from: r.from, salary: num(r.salary), arrearsOn: r.arrearsOn || null, otBackpay: !!r.otBackpay, basic: 0, ot: 0, total: 0, periods: 0 };
+    const riseCalc = rises.map((r, k) => {
+      const out = { idx: r.idx, from: r.from, salary: num(r.salary), arrearsOn: r.arrearsOn || null, otBackpay: !!r.otBackpay, basic: 0, ot: 0, total: 0, periods: 0 };
       if (!r.arrearsOn) return out;
+      /* Each rise is measured against the ones before it rather than against the
+         old salary, or two rises backdated over the same months would both be
+         paid from the bottom and the overlap counted twice. */
+      const before = new Set(rises.slice(0, k)), upTo = new Set(rises.slice(0, k + 1));
       rows.forEach(row => {
         if (row.payday >= r.arrearsOn || row.end < r.from) return;
-        const paid = avgSalary(row.start, row.payday), due = avgSalary(row.start, row.payday, r);
+        const paid = avgSalary(row.start, row.payday, before), due = avgSalary(row.start, row.payday, upTo);
         if (due <= paid) return;
         out.periods++;
         out.basic += basicOf(due) - basicOf(paid);
@@ -214,18 +235,23 @@ const C = (() => {
     });
 
     // EU holiday pay (Southeastern HPA): 4/52 of the calendar year's qualifying pay, paid on the first pay day in March of the next year
-    const curRow = rows.find(r => r.payday === next) || rows.find(r => !r.past) || rows[0] || { allow: 0, sacr: 0, after: 0 };
+    const curRow = rows.find(r => r.payday === next) || rows.find(r => !r.past) || rows[0]
+      || { allow: 0, sacr: 0, after: 0, basic: basicOf(num(p.salary)), hourly: hourlyOf(num(p.salary)) };
+    // the rate being paid now, rises included, rather than the salary first typed
+    const basic = curRow.basic, hourly = curRow.hourly;
     const allow = curRow.allow, sacr = curRow.sacr, after = curRow.after;
     const basicOnlyTaxable = basic + allow - sacr;
     const marginalNet = x => x - (paye(basicOnlyTaxable + x) - paye(basicOnlyTaxable)) - (ni(basicOnlyTaxable + x) - ni(basicOnlyTaxable));
     const hist = p.hpaHistory || {};
     const hpaYears = {};
-    rows.forEach(r => { const y = hpaYears[r.refYear] = hpaYears[r.refYear] || { year: r.refYear, qualifying: 0, periods: 0, logged: 0 }; y.qualifying += r.otPay + r.sunPay + r.backpayOt; y.periods++; if (r.ot || r.sun) y.logged++; });
+    rows.forEach(r => { if (r.payday < hpaFrom) return; const y = hpaYears[r.refYear] = hpaYears[r.refYear] || { year: r.refYear, qualifying: 0, periods: 0, logged: 0 }; y.qualifying += r.otPay + r.sunPay + r.backpayOt; y.periods++; if (r.ot || r.sun) y.logged++; });
     const allYears = new Set([...Object.keys(hpaYears), ...Object.keys(hist)]);
     const hpa = [...allYears].sort().map(y => {
       const est = hpaYears[y] ? r2(hpaYears[y].qualifying * 4 / 52) : null;
       const received = hist[y] != null && hist[y] !== '' ? num(hist[y]) : null;
-      const payRow = rows.find(r => r.payday >= `${+y + 1}-03-01`);
+      // March of the year after, and only March: an old year's figure kept for the
+      // record must not be paid again on whatever pay day happens to come next
+      const payRow = rows.find(r => r.payday.slice(0, 7) === `${+y + 1}-03`);
       const gross = received != null ? received : est;
       if (payRow && gross) payRow.hpaPay = gross;
       return { year: y, qualifying: hpaYears[y] ? hpaYears[y].qualifying : null, periods: hpaYears[y] ? hpaYears[y].periods : 0, logged: hpaYears[y] ? hpaYears[y].logged : 0,
@@ -238,8 +264,12 @@ const C = (() => {
       const extraGross = r.otPay + r.sunPay;
       const taxable = r2(r.basic + r.allow + r.otPay + r.sunPay + r.hpaPay + r.backpay - r.sacr);
       let tax, marginal;
-      n = Math.min(13, n + 1);
-      if (p.nonCumulative) {                            // week 1 / month 1 code: every period stands alone
+      n++;
+      /* A week 1 / month 1 code has every period stand alone. So does a 14th pay
+         day in one tax year — HMRC's "week 56" — which is taxed on its own four
+         weeks and leaves the year's running totals where they were, rather than
+         being taxed with no allowance at all. */
+      if (p.nonCumulative || n > 13) {
         tax = taxOn(taxable, 4, e);
         marginal = tax - taxOn(taxable - extraGross, 4, e);
       } else {                                          // cumulative: tax due on the year to date, less tax already paid
@@ -273,7 +303,9 @@ const C = (() => {
     const leadSet = p.payslipLead;
     const lead = leadSet === null || leadSet === undefined || leadSet === ''
       ? 4 : Math.max(0, Math.round(num(leadSet)));
-    const wants = rows.filter(r => r.actual === null);
+    const shown = rows.filter(r => !r.warm);
+    // nothing to ask about until there is a salary to have a payslip for
+    const wants = num(p.salary) ? shown.filter(r => r.actual === null) : [];
     const needsPayslip = wants.find(r => !r.past && daysBetween(tod, r.payday) <= lead)
       // a few days the other side too, for a pay day that went by without one,
       // then it stops: a reminder that never goes away is just wallpaper
@@ -282,7 +314,7 @@ const C = (() => {
     const thisTaxYear = aprilStart(tod);
     const yr = rows.filter(r => r.taxYear === thisTaxYear);
     const tot = k => yr.reduce((a, r) => a + num(r[k]), 0);
-    const totals = { ot: tot('ot'), sun: tot('sun'), otPay: tot('otPay'), sunPay: tot('sunPay'), hpaPay: tot('hpaPay'), backpay: tot('backpay'), taxable: tot('taxable'), paye: tot('paye'), ni: tot('ni'), net: tot('net'), extra: tot('extra'), extraGross: tot('extraGross') };
+    const totals = { ot: r2(tot('ot')), sun: r2(tot('sun')), otPay: tot('otPay'), sunPay: tot('sunPay'), hpaPay: tot('hpaPay'), backpay: tot('backpay'), taxable: tot('taxable'), paye: tot('paye'), ni: tot('ni'), net: tot('net'), extra: tot('extra'), extraGross: tot('extraGross') };
     totals.keep = totals.extraGross ? totals.extra / totals.extraGross : null;
     // how the projection has been doing against the payslips that replaced it
     totals.projected = tot('projected');
@@ -298,8 +330,8 @@ const C = (() => {
     const paShould = Math.max(0, TAXDEF.personalAllowance - Math.max(0, (totals.taxable - 100000) / 2));
     const paCheck = { taxable: totals.taxable, allowance: paNow, should: r2(paShould),
       stale: totals.taxable > 100000 && paNow > paShould };
-    let nextIdx = rows.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(rows.findIndex(r => !r.past), 0);
-    return { basic, hourly, allow, sacr, after, rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
+    let nextIdx = shown.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(shown.findIndex(r => !r.past), 0);
+    return { basic, hourly, allow, sacr, after, rows: shown, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
       payslipLead: lead, needsPayslip, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
@@ -310,8 +342,10 @@ const C = (() => {
      instead of going on costing its repayment every month for ever. Without a
      day, or a debt with no date to carry from, it is the full repayment, as it
      always was. */
+  // anything not marked Long-term is short-term, everywhere: the list, the bill that pays it, the totals
+  const debtType = d => d.type === 'Long-term' ? 'Long-term' : 'Short-term';
   function billAmount(b, debts, on, m, opt) {
-    if (b.link) return r2(debts.filter(d => d.type === b.link).reduce((a, d) => a + debtDue(d, m, on, opt), 0));
+    if (b.link) return r2(debts.filter(d => debtType(d) === b.link).reduce((a, d) => a + debtDue(d, m, on, opt), 0));
     return num(b.amount);
   }
   function debtDue(d, m, on, opt) {
@@ -319,13 +353,30 @@ const C = (() => {
     if (!pay || !on || !m || !d.balanceOn || on <= d.balanceOn) return pay;
     const before = debtNow(d, m, addDays(on, -1), opt);
     if (before.balance <= 0) return 0;
-    // the last payment is only what is left, interest included
-    return Math.min(pay, r2(before.balance + r2(before.balance * num(d.apr) / 12)));
+    // the last payment is only what is left, interest included — worked the same way debtNow works it
+    return Math.min(pay, r2(before.balance + r2(before.balance * (num(d.apr) / 12))));
   }
   // the bill that pays a debt, where there is one, says which day the money leaves
   function fundingBill(d, m, tod) {
-    return (m.bills || []).find(b => b.link && b.link === (d.type || 'Short-term')
-      && (!b.ended || b.ended >= mkey(tod)) && num(b.dueDay) >= 1) || null;
+    return (m.bills || []).find(b => b.link && b.link === debtType(d)
+      && (!isMonth(b.ended) || b.ended >= mkey(tod)) && num(b.dueDay) >= 1) || null;
+  }
+  /* The days a debt's repayments really leave from here on: the funding bill's
+     dates where there is one — moved off weekends, missing its months off — and
+     monthly from the day the balance was true where there is not, which is how
+     debtNow carries it. The clear date is the last of these, not a count of
+     months added to the first. */
+  function payDates(d, m, n, tod, opt) {
+    const from = isDate(d.balanceOn) && d.balanceOn > tod ? d.balanceOn : tod;
+    const bill = fundingBill(d, m, tod);
+    if (bill) {
+      const perYear = 12 - (bill.skip || []).length;
+      return perYear > 0 ? billDates(bill, addDays(from, 1), addMonths(from, Math.ceil(n * 12 / perYear) + 2), opt).slice(0, n).map(s => s.date) : [];
+    }
+    const anchor = isDate(d.balanceOn) ? d.balanceOn : from, out = [];
+    let k = Math.max(1, (+from.slice(0, 4) - +anchor.slice(0, 4)) * 12 + (+from.slice(5, 7) - +anchor.slice(5, 7)) - 1);
+    for (; out.length < n; k++) { const x = addMonths(anchor, k); if (x > from) out.push(x); }
+    return out;
   }
   function moneyCalc(m, tod, opt) {
     tod = tod || today();
@@ -340,13 +391,13 @@ const C = (() => {
       // a fixed rate runs out on a month you already know; after that the figures here are guesswork
       const rateDue = /^\d{4}-\d{2}$/.test(d.rateEnds || '') && d.rateEnds <= thisKey ? d.rateEnds : null;
       const payoff = debtPayoff({ ...d, balance: now.balance }, tod);
-      /* The formula counts the payments; the bill that pays the debt says which
-         day they leave, so the clear date lands in the right month rather than a
-         month late whenever the payment day falls later in the month than today. */
-      if (payoff && payoff.months && !payoff.never) {
-        const bill = fundingBill(d, m, tod);
-        const next = bill ? billDates(bill, addDays(tod, 1), addDays(tod, 45), opt)[0] : null;
-        if (next) payoff.date = addMonths(next.date, payoff.months - 1);
+      /* The formula counts the payments; the real schedule says which day the
+         last of them leaves, so the clear date lands in the right month — not a
+         month late when the payment day is later in the month than today, nor
+         when the last one is moved off a weekend or skips a month. */
+      if (payoff && payoff.months && !payoff.never && payoff.months <= 1200) {
+        const dates = payDates(d, m, payoff.months, tod, opt);
+        if (dates.length === payoff.months) payoff.date = dates[dates.length - 1];
       }
       return { ...d, balance: now.balance, now, rateDue, payoff };
     });
@@ -355,22 +406,33 @@ const C = (() => {
       /* A last-payment month can be behind you (a bill that has finished, or the
          old price in a history split) or ahead (a phone contract with its final
          month known). Until it comes the bill is live and counts; after it, the
-         bill drops out on its own. */
-      const finished = !!b.ended && b.ended < thisKey;
-      const left = b.ended && !finished
-        ? billDates(b, addDays(tod, 1), addDays(addMonths(b.ended + '-01', 1), -1), opt).length : null;
-      // a linked bill ends when the last of its debts clears
-      const linked = b.link ? debtCalc.filter(d => d.type === b.link && num(d.repayment)) : null;
+         bill drops out on its own. The count is of real payment dates, and runs
+         a week past the month, since a last payment dated the 31st can be moved
+         off a weekend into the month after. */
+      const ended = isMonth(b.ended) ? b.ended : null, dated = num(b.dueDay) >= 1;
+      const left = ended && dated ? billDates(b, addDays(tod, 1), addDays(addMonths(ended + '-01', 1), 6), opt).length : null;
+      const finished = !!ended && ended < thisKey && !left;
+      // one that has not started yet is not costing anything yet
+      const notYet = isMonth(b.started) && b.started > thisKey;
+      // a linked bill ends when the last of its debts clears; one already cleared has no say
+      const linked = b.link ? debtCalc.filter(d => debtType(d) === b.link && num(d.repayment) && !(d.now.on && d.balance <= 0)) : null;
       const clears = linked && linked.length && linked.every(d => d.payoff && d.payoff.date)
         ? linked.map(d => d.payoff.date).sort().pop() : null;
+      /* The price check runs from the month the price changes, for six months —
+         across a year end too, so a December change is not forgotten on New
+         Year's Day — and then lets go, as every nudge here does. */
       const mo = Math.round(num(b.review));
-      const due = (mo >= 1 && mo <= 12) && `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` <= thisKey
-        ? `${tod.slice(0, 4)}-${String(mo).padStart(2, '0')}` : null;
+      let due = null;
+      if (mo >= 1 && mo <= 12) {
+        const y = +tod.slice(0, 4), pad = String(mo).padStart(2, '0');
+        const last = `${y}-${pad}` <= thisKey ? `${y}-${pad}` : `${y - 1}-${pad}`;
+        if (mkey(addMonths(last + '-01', 6)) > thisKey && !(isMonth(b.started) && b.started > last)) due = last;
+      }
       // a bill paid ten months of the year costs less over a year than twelve times its price
-      return { ...b, amt, paidMonths: months, yearly: r2(amt * months), finished, left, clears,
+      return { ...b, amt, paidMonths: months, yearly: r2(amt * months), finished, notYet, left, clears,
         dueReview: due && (!b.reviewedOn || b.reviewedOn < due) ? due : null };
     });
-    const active = bills.filter(b => !b.finished);
+    const active = bills.filter(b => !b.finished && !b.notYet);
     const activeTotal = active.reduce((a, b) => a + b.amt, 0);
     const yearTotal = r2(active.reduce((a, b) => a + b.yearly, 0));
     const anySkips = active.some(b => b.paidMonths < 12);
@@ -386,19 +448,20 @@ const C = (() => {
       return { ...x, has, outgoings: out, disposable: disp, potential: pot, savedN: num(x.saved) };
     });
     const byYear = {};
-    months.forEach(x => { const y = x.month.slice(0, 4); const o = byYear[y] = byYear[y] || { year: y, earnings: 0, outgoings: 0, disposable: 0, potential: 0, saved: 0, n: 0 };
-      if (x.has) { o.earnings += num(x.earnings); o.outgoings += x.outgoings; o.disposable += x.disposable; o.potential += x.potential; o.n++; }
+    months.forEach(x => { const y = x.month.slice(0, 4); const o = byYear[y] = byYear[y] || { year: y, earnings: 0, outgoings: 0, disposable: 0, potential: 0, saved: 0, savedE: 0, n: 0 };
+      if (x.has) { o.earnings += num(x.earnings); o.outgoings += x.outgoings; o.disposable += x.disposable; o.potential += x.potential; o.n++; o.savedE += x.savedN; }
       o.saved += x.savedN; });
-    Object.values(byYear).forEach(o => o.rate = o.earnings ? o.saved / o.earnings : null);
+    // a rate compares like with like: savings from the months whose earnings are in
+    Object.values(byYear).forEach(o => o.rate = o.earnings ? o.savedE / o.earnings : null);
     const withData = months.filter(x => x.has);
     const latest = withData.length ? withData[withData.length - 1] : null;
     const ly = latest ? latest.month.slice(0, 4) : tod.slice(0, 4);
-    const yearRow = byYear[ly] || null;
+    const yearRow = byYear[tod.slice(0, 4)] || byYear[ly] || null;
     const thisMonthKey = mkey(tod);
     const debtTotal = debtCalc.reduce((a, d) => a + num(d.balance), 0);
     // a cleared debt is not costing anything any more
     const repayTotal = debtCalc.reduce((a, d) => a + (d.now.on && d.balance <= 0 ? 0 : num(d.repayment)), 0);
-    const st = debtCalc.filter(d => d.type === 'Short-term');
+    const st = debtCalc.filter(d => debtType(d) === 'Short-term');
     const stClear = st.map(d => d.payoff).filter(x => x && x.date).map(x => x.date).sort().pop() || null;
     return { bills, active, activeTotal, yearTotal, anySkips, reviews: active.filter(b => b.dueReview),
       rateReviews: debtCalc.filter(d => d.rateDue), noRateDebts: debtCalc.filter(d => d.now.noRate),
@@ -453,7 +516,7 @@ const C = (() => {
   }
   function debtPayoff(d, tod) {
     const B = num(d.balance), P = num(d.repayment);
-    if (!B || !P) return null;
+    if (!(B > 0) || !(P > 0)) return null;
     if (!d.apr) return { months: Math.ceil(B / P), date: addMonths(tod, Math.ceil(B / P)), naive: true };
     const r = num(d.apr) / 12; const k = 1 - r * B / P;
     if (k <= 0) return { never: true };
@@ -467,21 +530,21 @@ const C = (() => {
      anything landing on a weekend or bank holiday. */
   function billDates(b, from, to, opt) {
     const day = Math.round(num(b.dueDay));
-    if (!(day >= 1)) return [];
-    const out = [];
-    let mk = mkey(addMonths(from, -1));
-    const end = mkey(addMonths(to, 1));
-    for (let guard = 0; mk <= end && guard < 80; guard++) {
+    if (!(day >= 1) || from > to) return [];
+    opt = opt || { shift: 'exact', bankHols: false };
+    // a month either side of the window, since a moved date can cross into it; walked as numbers,
+    // with no cap — a mortgage's 25 years of payments used to stop counting after 80 months
+    const started = isMonth(b.started) ? b.started : '0000-00', ended = isMonth(b.ended) ? b.ended : null;
+    const skip = b.skip || [], out = [];
+    let y = +from.slice(0, 4), mo = +from.slice(5, 7) - 2;
+    if (mo < 0) { mo += 12; y--; }
+    const endY = +to.slice(0, 4) + (to.slice(5, 7) === '12' ? 1 : 0), endMo = +to.slice(5, 7) % 12;
+    for (; y < endY || (y === endY && mo <= endMo); mo === 11 ? (mo = 0, y++) : mo++) {
+      const mk = `${y}-${String(mo + 1).padStart(2, '0')}`;
       // council tax over ten instalments, a gym frozen for the winter: months off
-      const inForce = (b.started || '0000-00') <= mk && (!b.ended || b.ended >= mk)
-        && !(b.skip || []).includes(+mk.slice(5, 7));
-      if (inForce) {
-        const y = +mk.slice(0, 4), mo = +mk.slice(5, 7) - 1;
-        const nominal = d2i(new Date(Date.UTC(y, mo, Math.min(day, dim(y, mo)))));
-        const s = shiftDue(nominal, opt.shift, opt.bankHols);
-        if (s.date >= from && s.date <= to) out.push(s);
-      }
-      mk = mkey(addMonths(mk + '-01', 1));
+      if (started > mk || (ended && ended < mk) || skip.includes(mo + 1)) continue;
+      const s = shiftDue(`${mk}-${String(Math.min(day, dim(y, mo))).padStart(2, '0')}`, opt.shift, opt.bankHols);
+      if (s.date >= from && s.date <= to) out.push(s);
     }
     return out;
   }
@@ -506,7 +569,13 @@ const C = (() => {
     tod = tod || today();
     const to = p.nextPayDay;
     const payRow = p.rows[p.nextIdx] || null;
-    const events = billEvents(m, addDays(tod, 1), to, opt);
+    /* Up to the day before pay day. A bill dated pay day itself leaves in the
+       same early-morning batch the pay lands in, so it comes out of the pay:
+       counting it before made a month's rent on pay day read as a shortfall,
+       and the period that starts that day counted it a second time. */
+    const events = billEvents(m, addDays(tod, 1), addDays(to, -1), opt);
+    const onPay = billEvents(m, to, to, opt);
+    const onPayOut = r2(onPay.reduce((a, e) => a + e.amount, 0));
     const out = events.reduce((a, e) => a + e.amount, 0);
     const hasBal = m.balance !== null && m.balance !== undefined && m.balance !== '';
     const typed = hasBal ? num(m.balance) : null;
@@ -530,7 +599,12 @@ const C = (() => {
        schedule of its own, and then the pay row wins. */
     const carriedPays = typedOn ? p.rows.filter(r => r.payday > typedOn && r.payday <= tod && r.payday < to) : [];
     const carriedIn = r2(carriedPays.reduce((a, r) => a + num(r.net), 0));
-    const start = hasBal ? r2(typed - carriedOut + carriedIn) : null;
+    /* Money the app itself has moved since the balance was typed — the card
+       cleared with Pay now. It rides on top of the typed figure rather than
+       replacing it, so the reading keeps its date and the bills carried since
+       still come off; the next reading typed takes it along with it. */
+    const adj = hasBal ? r2(num(m.balanceAdj)) : 0;
+    const start = hasBal ? r2(typed - carriedOut + carriedIn + adj) : null;
     const days = Math.max(daysBetween(tod, to), 0);
     /* A credit card balance gets paid whichever way the tick is set — it only
        decides whether it eats into the money before pay day or comes off when
@@ -557,7 +631,7 @@ const C = (() => {
     const low = series.length ? series.reduce((a, x) => x.bal < a.bal ? x : a, series[0]) : null;
     return {
       from: tod, to, days, events, outgoings: r2(out), start, hasBal, atPayday, buffer, series, low,
-      typed, typedOn, carried, carriedOut, carriedIn, carriedPays,
+      typed, typedOn, carried, carriedOut, carriedIn, carriedPays, adj, onPay, onPayOut,
       staleDays: typedOn ? daysBetween(typedOn, tod) : 0,
       wasCarried: !!typedOn && (carried.length > 0 || carriedPays.length > 0),
       overdraft, headroom: hasBal && low ? r2(low.bal + overdraft) : null,
@@ -566,7 +640,7 @@ const C = (() => {
       perDay: hasBal && days > 0 ? r2((atPayday + overdraft - buffer) / days) : null,
       net: payRow ? payRow.net : null,
       amex, amexBefore, amexNow, amexOnPay, paydayPassed: carriedPays.length > 0,
-      afterPay: hasBal && payRow ? r2(atPayday + payRow.net - amexOnPay) : null,
+      afterPay: hasBal && payRow ? r2(atPayday + payRow.net - amexOnPay - onPayOut) : null,
       shortfall: hasBal && low ? low.bal < -overdraft : false
     };
   }
@@ -601,7 +675,8 @@ const C = (() => {
     sav = sav || {};
     tod = tod || today();
     const balance = r2(num(sav.balance)), monthly = num(sav.monthly);
-    const all = (sav.goals || []).map(g => ({ ...g, cost: num(g.cost), paid: num(g.paid) }));
+    const all = (sav.goals || []).map(g => ({ ...g, cost: num(g.cost), paid: num(g.paid),
+      paidSet: g.paid !== null && g.paid !== undefined && g.paid !== '' }));
     const got = all.filter(g => g.got).sort((a, b) => String(b.got).localeCompare(String(a.got)));
     const goals = all.filter(g => !g.got).map(g => {
       const short = r2(Math.max(g.cost - balance, 0));
@@ -611,8 +686,8 @@ const C = (() => {
         months, by: months ? addMonths(tod, months) : null,
         // nothing going in and not there yet: it is not arriving on its own
         stalled: short > 0 && !monthly };
-    // what you could have next first, then whatever is closest to affordable
-    }).sort((a, b) => a.short - b.short || a.cost - b.cost);
+    // what you could have next first, then whatever is closest to affordable; no price yet goes last
+    }).sort((a, b) => (b.cost > 0) - (a.cost > 0) || a.short - b.short || a.cost - b.cost);
     const wanted = r2(goals.reduce((a, g) => a + g.cost, 0));
     const toGo = r2(Math.max(wanted - balance, 0));
     const allMonths = (toGo > 0 && monthly > 0) ? Math.ceil(toGo / monthly) : null;
@@ -627,9 +702,9 @@ const C = (() => {
     return { balance, monthly, goals, got, wanted, toGo,
       spare: r2(balance - wanted),
       months: allMonths, by: allMonths ? addMonths(tod, allMonths) : null,
-      next: goals.find(g => !g.covered) || null,
+      next: goals.find(g => g.cost > 0 && !g.covered) || null,
       affordable: goals.filter(g => g.covered).length,
-      spent: r2(got.reduce((a, g) => a + (g.paid || g.cost), 0)),
+      spent: r2(got.reduce((a, g) => a + (g.paidSet ? g.paid : g.cost), 0)),
       debtTotal, longTotal, allTotal, withLong: !!withLong, net: r2(balance - debtTotal) };
   }
 
@@ -637,7 +712,8 @@ const C = (() => {
      Keeping history means one bill is several rows: the old amount with an
      "ended" month, then a new row starting the month after. Chain those rows
      back together by name to see what a bill has actually done over time. */
-  function priceHistory(bills) {
+  function priceHistory(bills, tod) {
+    const thisKey = mkey(tod || today());
     const byName = {};
     (bills || []).forEach(b => {
       if (b.link) return;                          // linked bills track the debts, not a price
@@ -657,6 +733,7 @@ const C = (() => {
       }
       if (!changes.length) return;
       const first = num(rows[0].amount), latest = rows[rows.length - 1];
+      if (isMonth(latest.ended) && latest.ended < thisKey) return;      // finished altogether
       out.push({ name: latest.name, category: latest.category, current: num(latest.amount),
         first, since: rows[0].started, changes, last: changes[changes.length - 1],
         total: r2(num(latest.amount) - first), rows: rows.length });
@@ -679,10 +756,17 @@ const C = (() => {
       .filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on) && has(x.balance))
       .slice().sort((a, b) => a.on.localeCompare(b.on));
     const windows = [];
+    // every bill across the whole log at once, then dealt into the windows in order:
+    // a full log used to work the bill dates out afresh for each of 119 windows
+    const span = log.length > 1 ? billEvents(m, addDays(log[0].on, 1), log[log.length - 1].on, opt) : [];
+    let ei = 0;
     for (let i = 1; i < log.length; i++) {
       const a = log[i - 1], b = log[i], days = daysBetween(a.on, b.on);
       if (days <= 0) continue;
-      const bills = r2(billEvents(m, addDays(a.on, 1), b.on, opt).reduce((s, e) => s + e.amount, 0));
+      while (ei < span.length && span[ei].date <= a.on) ei++;
+      let sum = 0;
+      for (let j = ei; j < span.length && span[j].date <= b.on; j++) sum += span[j].amount;
+      const bills = r2(sum);
       const pay = r2(((p && p.rows) || []).filter(r => r.payday > a.on && r.payday <= b.on)
         .reduce((s, r) => s + num(r.net), 0));
       const adj = num(b.adj);
@@ -728,12 +812,12 @@ const C = (() => {
     tod = tod || today();
     const y = +tod.slice(0, 4);
     const byYear = {}; (games || []).forEach(g => { if (g.date) byYear[g.date.slice(0, 4)] = (byYear[g.date.slice(0, 4)] || 0) + 1; });
-    const dated = (games || []).filter(g => g.date).sort((a, b) => a.date.localeCompare(b.date));
+    const dated = (games || []).filter(g => g.date && g.date <= tod).sort((a, b) => a.date.localeCompare(b.date));
     const last = dated.length ? dated[dated.length - 1] : null;
     return { thisYear: byYear[y] || 0, lastYear: byYear[y - 1] || 0, byYear, last, daysSince: last ? daysBetween(last.date, tod) : null, total: (games || []).length };
   }
 
-  return { r2, num, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct, rate,
+  return { r2, num, isDate, isMonth, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct, rate,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
     payCalc, moneyCalc, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();

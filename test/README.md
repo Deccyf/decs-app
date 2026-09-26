@@ -28,6 +28,10 @@ run — a lot of them assert exact pounds and pence. The browser tests do it by
 replacing `window.Date` before the page loads, and each one asserts that the
 page logged no console or uncaught errors.
 
+The last section of each file holds the regressions from the full review: each
+test there reproduces a bug that was found and fixed, so a failure in one means
+that bug is back.
+
 Two habits worth keeping when adding tests here. Seed the fixture with the
 shape the app stores rather than a raw object, since `normalize()` fills in
 defaults and a `deepEqual` against the raw fixture will drift. And assert

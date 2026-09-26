@@ -1,5 +1,5 @@
 /* Dec's Tracker — offline cache. Bump V whenever index.html changes. */
-const V = 'decs-tracker-v33';
+const V = 'decs-tracker-v34';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 const NET_TIMEOUT = 2500;
 
@@ -23,16 +23,24 @@ self.addEventListener('fetch', e => {
   let url; try { url = new URL(req.url); } catch (err) { return; }
   if (url.origin !== self.location.origin) return;
   const isPage = req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html');
-  e.respondWith(isPage ? page(req) : asset(req));
+  e.respondWith(isPage ? page(e, req) : asset(req));
 });
 
 const timed = p => new Promise(res => {
   const t = setTimeout(() => res(null), NET_TIMEOUT);
   p.then(r => { clearTimeout(t); res(r); }, () => { clearTimeout(t); res(null); });
 });
-async function page(req) {
-  const fresh = await timed(fetch(req));
-  if (fresh && fresh.ok) { (await caches.open(V)).put(req, fresh.clone()); return fresh; }
+/* On a slow connection the cached copy answers after the timeout, but the
+   fetch carries on and the new version is cached when it arrives, so the next
+   open has it. Throwing it away left a phone on poor signal on the old version
+   for good. */
+async function page(e, req) {
+  const net = fetch(req);
+  // the cache's copy is cloned the moment it arrives (before the page reads the body), in time or not
+  e.waitUntil(net.then(r => { if (!r || !r.ok) return null; const copy = r.clone(); return caches.open(V).then(c => c.put(req, copy)); })
+    .catch(() => { }));
+  const fresh = await timed(net);
+  if (fresh && fresh.ok) return fresh;
   return (await caches.match(req, { ignoreSearch: true }))
     || (await caches.match('./index.html'))
     || new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });

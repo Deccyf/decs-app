@@ -12,12 +12,15 @@ function billRow(b) {
   const extra = [];
   if (b.link) extra.push(`follows your ${esc(b.link.toLowerCase())} debt repayments${b.clears ? ', last one clears ' + esc(C.fmtM(b.clears)) : ''}`);
   if (b.paidMonths < 12) extra.push(`paid ${b.paidMonths} months a year, ${C.gbp(b.yearly, 0)} a year`);
+  if (b.notYet) extra.push(`starts ${esc(C.fmtM(b.started))}`);
   if (b.finished) extra.push(`finished ${esc(C.fmtM(b.ended))}`);
-  else if (b.ended) extra.push(b.left ? `${b.left} payment${b.left === 1 ? '' : 's'} left, last in ${esc(C.fmtM(b.ended))}` : `last payment made, ends ${esc(C.fmtM(b.ended))}`);
+  // with no payment date there is nothing to count, so it just says when it ends
+  else if (b.ended) extra.push(b.left === null ? `ends ${esc(C.fmtM(b.ended))}`
+    : b.left ? `${b.left} payment${b.left === 1 ? '' : 's'} left, last in ${esc(C.fmtM(b.ended))}` : `last payment made, ends ${esc(C.fmtM(b.ended))}`);
   return `<div class="row"><div class="l"><b>${esc(b.name)}</b>
     <small>${esc(b.category || '')}${C.num(b.dueDay) ? ' · ' + esc(C.ord(Math.round(C.num(b.dueDay)))) + ' of the month' : ' · <span class="warn">no date set</span>'}</small>
     ${extra.length ? `<small>${extra.join(' · ')}</small>` : ''}</div>
-    <div class="num tr${b.finished ? ' muted' : ''}">${C.gbp(b.amt)}</div></div>`;
+    <div class="num tr${b.finished || b.notYet ? ' dim' : ''}">${C.gbp(b.amt)}</div></div>`;
 }
 /* A debt. Words on the left, figures on the right, and every line short
    enough to stay one line on a narrow phone: measured, not guessed, because a
@@ -57,7 +60,7 @@ function goalRow(g, actions) {
 function gotRow(g) {
   return `<div class="row"><div class="l"><b>${esc(g.name || 'Something')}</b>
       <small>got ${esc(C.fmtD(g.got))}${g.paid && g.cost && C.r2(g.paid) !== C.r2(g.cost) ? ' · listed at ' + C.gbp(g.cost, 0) : ''}</small></div>
-    <div class="num tr">${C.gbp(g.paid)}<button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div></div>`;
+    <div class="num tr">${C.gbp(g.paid)}</div><button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div>`;
 }
 /* ---- the Pay tab, in pieces ---- */
 const resRow = (l, v, cls = '') => `<div class="r ${cls}"><span>${esc(l)}</span><span class="num">${v}</span></div>`;
@@ -68,7 +71,7 @@ function payslipCard(r) {
       <div class="results">
         ${resRow('Basic pay', C.gbp(r.basic))}${r.allow ? resRow('Allowances', C.gbp(r.allow)) : ''}
         ${resRow('Overtime pay', C.gbp(r.otPay))}${resRow(SUN, C.gbp(r.sunPay))}${r.backpay ? resRow('Backpay (estimate)', C.gbp(r.backpay)) : ''}${r.hpaPay ? resRow('EU Holiday Pay' + (S.pay.hpaHistory[String(+r.refYear - 1)] != null && S.pay.hpaHistory[String(+r.refYear - 1)] !== '' ? '' : ' (estimate)'), C.gbp(r.hpaPay)) : ''}${r.sacr ? resRow('Salary sacrifice', '-' + C.gbp(r.sacr)) : ''}
-        ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', '-' + C.gbp(r.paye))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
+        ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', r.paye < 0 ? '+' + C.gbp(-r.paye) + '<small>tax back</small>' : r.paye ? '-' + C.gbp(r.paye) : C.gbp(0))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
         ${resRow(r.actual !== null ? 'Net pay (your payslip)' : 'Net pay (projected)', C.gbp(r.net), 'total')}
         ${r.actual !== null ? resRow('Projected was', C.gbp(r.projected) + '<small>' + (
           !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over the payslip')) + '</small>') : ''}
@@ -194,7 +197,7 @@ function paySettings(p) {
     ${detailsBlock('yourpay', 'Your pay', `<div class="grid2">
       ${field('Annual basic salary', inp('pay.salary', P.salary))}${field('Contracted hours / week', inp('pay.hoursWeek', P.hoursWeek))}
       ${field('Weeks per year (payroll)', inp('pay.weeksYear', P.weeksYear))}${P.sundayAtT ? field('Sunday hours', '<input type="text" value="paid at plain time" disabled>') : field('Sunday premium £/hr', inp('pay.sundayRate', P.sundayRate))}
-      ${field('Next pay day', inp('pay.nextPayDay', P.nextPayDay, 'date'))}${field('Period ends (days before pay)', inp('pay.periodEndDays', P.periodEndDays))}
+      ${field('Next pay day', inp('pay.nextPayDay', p.nextPayDay, 'date', 'required'))}${field('Period ends (days before pay)', inp('pay.periodEndDays', P.periodEndDays))}
       ${field('Payslip lands (days early)', inp('pay.payslipLead', P.payslipLead, 'number', 'min="0" max="28" step="1"'))}
       ${field('Tax code (note only)', inp('pay.taxCode', P.taxCode, 'text'))}
       ${(() => { const y = String(+C.today().slice(0, 4) - 1); return field('EU Holiday Pay received for ' + y + ' (£)', inp('pay.hpaHistory.' + y, P.hpaHistory[y])); })()}
@@ -210,7 +213,7 @@ function taxYearList(p) {
     const y = +String(x.from).slice(0, 4);
     const live = p.rows.some(r => r.taxYear === x.from);
     return `<div class="erow"><div class="full"><b>${y}/${String(y + 1).slice(2)}</b> ${live ? '<span class="muted small">— in use</span>' : ''}</div>
-      ${field('Starts', inp(`pay.taxYears.${i}.from`, x.from, 'date'))}${field('Personal allowance (code ×10+9)', inp(`pay.taxYears.${i}.personalAllowance`, x.personalAllowance))}
+      ${field('Starts', inp(`pay.taxYears.${i}.from`, x.from, 'date', 'required'))}${field('Personal allowance (code ×10+9)', inp(`pay.taxYears.${i}.personalAllowance`, x.personalAllowance))}
       ${field('Basic rate', pctInp(`pay.taxYears.${i}.basicRate`, x.basicRate))}${field('Basic band up to', inp(`pay.taxYears.${i}.basicBand`, x.basicBand))}
       ${field('Higher rate', pctInp(`pay.taxYears.${i}.higherRate`, x.higherRate))}${field('Higher band up to', inp(`pay.taxYears.${i}.higherBand`, x.higherBand))}
       ${field('Additional rate', pctInp(`pay.taxYears.${i}.addRate`, x.addRate))}${field('NI threshold (year)', inp(`pay.taxYears.${i}.niPT`, x.niPT))}
@@ -224,7 +227,7 @@ function taxYearList(p) {
 function risesList(p) {
   const R = S.pay.rises || [];
   const rows = R.map((x, i) => {
-    const c = p.rises[i] || {};
+    const c = p.rises.find(q => q.idx === i) || {};
     const note = !x.from || !x.salary ? 'Fill in the date and the new salary.'
       : !x.arrearsOn ? 'Applies from ' + esc(C.fmtD(x.from)) + ' — no backpay. A period spanning that date is split by day.'
       : c.total ? 'Estimated backpay ' + C.gbp(c.total) + ' on ' + esc(C.fmtD(x.arrearsOn)) + ' — basic ' + C.gbp(c.basic) + (c.ot ? ' + overtime ' + C.gbp(c.ot) : '') + ' across ' + c.periods + ' pay ' + (c.periods === 1 ? 'day' : 'days') + '.'
@@ -243,15 +246,11 @@ function fixedList(p) {
   const rows = ui.editFixed ? F.map((f, i) => `<div class="erow"><div class="full">${field('Item', inp(`pay.fixed.${i}.name`, f.name, 'text'))}</div>
       ${field('£ per period', inp(`pay.fixed.${i}.amount`, f.amount))}${field('Treatment', sel(`pay.fixed.${i}.treatment`, f.treatment, ['Allowance', 'Sacrifice', 'After-tax']))}
       ${field('Started (blank = always)', inp(`pay.fixed.${i}.from`, f.from, 'date'))}${field('Ended (blank = ongoing)', inp(`pay.fixed.${i}.to`, f.to, 'date'))}
-      <div class="full"><button class="btn danger sm" data-act="delFixed" data-i="${i}">Remove ${esc(f.name || 'item')}</button></div></div>`).join('') || '<div class="empty">Nothing here yet.</div>'
+      <div class="full"><button class="btn danger sm" data-act="delFixed" data-i="${i}" aria-label="Remove ${esc(f.name || 'this item')}">Remove this item</button></div></div>`).join('') || '<div class="empty">Nothing here yet.</div>'
     : F.map(f => `<div class="row"><div class="l"><b>${esc(f.name)}</b><small>${esc(f.treatment)}${span(f) ? ' · ' + span(f) : ''}</small></div><div class="num">${C.gbp(f.amount)}</div></div>`).join('') || '<div class="empty">Nothing here yet.</div>';
   return `${rows}<div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editFixed">${ui.editFixed ? 'Done' : 'Edit items'}</button>${ui.editFixed ? '<button class="btn sm" data-act="addFixed">Add item</button>' : ''}</div>
     <div class="note">Allowance = taxed with pay · Sacrifice = off before tax and NI · After-tax = off net pay. On the next pay day: allowances ${C.gbp(p.allow)}, sacrifice ${C.gbp(p.sacr)}, after-tax ${C.gbp(p.after)}.</div>
     <div class="note">Leave both dates blank for something that has always been there. Add dates for anything that starts or stops — a tech scheme, a holiday purchase — and only the pay days it covers change. A date falling mid-period is split by day, which is exactly what payroll did to the pension in May, so to change an amount, end the old line the day before and start a new one.</div>`;
-}
-function recent(n) {
-  const list = S.games.filter(g => g.date).sort((a, b) => b.date.localeCompare(a.date)).slice(0, n);
-  return list.length ? `<div class="eyebrow mt12">Recent completions</div>${list.map(g => `<div class="row"><div class="l"><b>${esc(g.game)}</b></div><span class="muted small">${esc(C.fmtD(g.date))}</span></div>`).join('')}` : '';
 }
 function tickList() {
   const q = ui.search.trim().toLowerCase();

@@ -537,8 +537,13 @@ test('clearing the card is a button, and it undoes cleanly', skip, async t => {
   await page.waitForTimeout(400);
   m = await stored();
   assert.equal(m.amex, 0, 'card zeroed');
-  assert.equal(m.balance, -1511.26, '£900 off the balance');
-  assert.equal(m.balanceOn, '2026-09-20', 're-anchored to today');
+  assert.equal(m.balanceAdj, -900, '£900 off the balance');
+  assert.equal(m.balance, -611.26, 'the reading you typed is left as you typed it');
+  assert.equal(m.balanceOn, '2026-09-16', 'and keeps its date');
+  // Sunday 20th's bill goes on the Monday, so it is still to come: -611.26 - 900 now, -120.50 after
+  const res = await page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' '));
+  assert.match(res, /Balance today\s*-£1,511\.26/);
+  assert.match(res, /morning of pay day\s*-£1,631\.76/);
   assert.ok(m.amexUndo, 'and the snapshot is kept');
   assert.equal(await page.$$eval('[data-act="amexClear"]', e => e.length), 0, 'nothing left to clear');
 
@@ -546,7 +551,8 @@ test('clearing the card is a button, and it undoes cleanly', skip, async t => {
   await page.waitForTimeout(400);
   m = await stored();
   assert.equal(m.amex, 900, 'card balance back');
-  assert.equal(m.balance, -611.26, 'balance back');
+  assert.equal(m.balanceAdj, 0, 'balance back');
+  assert.equal(m.balance, -611.26);
   assert.equal(m.balanceOn, '2026-09-16', 'and the original anchor date too');
   assert.equal(m.amexUndo, null, 'snapshot spent');
   assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0);
@@ -1017,10 +1023,11 @@ test('the AMEX undo and the general undo agree', skip, async t => {
   const page = await open(t, { data, tab: 'money' });
   await page.click('[data-act="amexClear"]'); await page.waitForTimeout(400);
   let m = (await stored(page)).money;
-  assert.equal(m.balance, 750); assert.equal(m.amex, 0); assert.ok(m.amexUndo);
+  assert.equal(m.balanceAdj, -250); assert.equal(m.amex, 0); assert.ok(m.amexUndo);
   await page.click('#undoBtn'); await page.waitForTimeout(400);
   m = (await stored(page)).money;
-  assert.equal(m.balance, 1000, 'general undo reverses Pay now');
+  assert.equal(m.balanceAdj, 0, 'general undo reverses Pay now');
+  assert.equal(m.balance, 1000);
   assert.equal(m.amex, 250);
   assert.equal(m.amexUndo, null, 'and the card\'s own undo is not left dangling');
   assert.equal(await page.$$eval('[data-act="amexUndo"]', e => e.length), 0);
@@ -1092,17 +1099,55 @@ test('clearing the card is not counted as a day of spending', skip, async t => {
   await page.click('[data-act="amexClear"]');
   await page.waitForTimeout(400);
   let m = await stored(page).then(s => s.money);
-  assert.equal(m.balance, 900, 'the card came off the balance');
+  assert.equal(m.balanceAdj, -300, 'the card came off the balance');
+  assert.equal(m.balanceLog.length, 1, 'but that is not a reading off the bank, so nothing is logged');
+
+  // the undo leaves the log exactly as it was
+  await page.click('[data-act="amexUndo"]'); await page.waitForTimeout(400);
+  m = await stored(page).then(s => s.money);
+  assert.equal(m.balanceAdj, 0);
+  assert.deepEqual(m.balanceLog, [{ on: '2026-09-02', balance: 1200, adj: 0 }]);
+
+  // pay it again, then check the bank: the reading takes the £300 with it
+  await page.click('[data-act="amexClear"]'); await page.waitForTimeout(400);
+  await page.fill('[data-set="money.balance"]', '900');
+  await page.dispatchEvent('[data-set="money.balance"]', 'change'); await page.waitForTimeout(400);
+  m = await stored(page).then(s => s.money);
   assert.deepEqual(m.balanceLog[1], { on: '2026-09-09', balance: 900, adj: -300 }, 'logged with what the app took off');
+  assert.equal(m.balanceAdj, 0, 'handed over to the reading');
   const card = (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
     .find(c => c.includes('Day-to-day spending'));
   assert.match(card, /£0\.00 spent/, 'the £300 is explained, so nothing reads as spending');
+});
 
-  await page.click('[data-act="amexUndo"]');
-  await page.waitForTimeout(400);
-  m = await stored(page).then(s => s.money);
-  assert.equal(m.balance, 1200);
-  assert.equal(m.balanceLog.length, 1, 'the undo takes the reading back out too');
+test('Pay now takes the card off the balance as it stands today', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [{ id: 'r', name: 'Rent', category: 'Housing', amount: 780, dueDay: 21, started: '2024-01' }];
+  Object.assign(data.money, { balance: 1000, balanceOn: '2026-09-20', buffer: 0, amex: 100, amexBefore: false,
+    balanceLog: [{ on: '2026-09-20', balance: 1000, adj: 0 }] });
+  const page = await open(t, { on: '2026-09-24', data, tab: 'money' });
+  await page.click('[data-act="amexClear"]'); await page.waitForTimeout(400);
+  const res = await page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' '));
+  assert.match(res, /Estimated balance today\s*£120\.00/, '£1,000, less the £780 rent since, less the £100 card');
+  assert.match(await page.$eval('#view', e => e.textContent.replace(/\s+/g, ' ')),
+    /Carried forward from the £1,000\.00 you entered on 20 Sep 2026, less £780\.00 of bills, less £100\.00 paid off the card with Pay now since/);
+  const m = (await stored(page)).money;
+  assert.equal(m.balanceOn, '2026-09-20', 'the bank has not been checked, so the balance is still that old');
+});
+
+test('flipping an old balance negative corrects that reading, not today\'s', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [{ id: 'e', name: 'Energy', category: 'Utilities', amount: 120.5, dueDay: 20, started: '2024-01' }];
+  Object.assign(data.money, { balance: 611.26, balanceOn: '2026-09-16', buffer: 0, overdraft: 2000,
+    balanceLog: [{ on: '2026-09-16', balance: 611.26, adj: 0 }] });
+  const page = await open(t, { on: '2026-09-24', data, tab: 'money' });
+  await page.click('.signed .sgn'); await page.waitForTimeout(400);
+  const m = (await stored(page)).money;
+  assert.equal(m.balance, -611.26);
+  assert.equal(m.balanceOn, '2026-09-16', 'still the day it was read');
+  assert.deepEqual(m.balanceLog, [{ on: '2026-09-16', balance: -611.26, adj: 0 }], 'and that day\'s reading follows');
+  assert.match(await page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' ')),
+    /Estimated balance today\s*-£731\.76/, 'the bill since still comes off');
 });
 
 test('Home asks for a backup, and downloading one dates it', skip, async t => {
@@ -1563,4 +1608,224 @@ test('changing the price of a bill with a known end keeps the end', skip, async 
   assert.equal(b.length, 2);
   assert.deepEqual([b[0].amount, b[0].ended], [34.5, '2026-08'], 'the old price ends last month');
   assert.deepEqual([b[1].amount, b[1].started, b[1].ended], [36, '2026-09', '2027-03'], 'the new one keeps the real last month');
+});
+
+/* ---------- review fixes ---------- */
+test('adding a bill leaves the editor working, months picker and all', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money', sec: 'bills' });
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  await page.click('[data-act="addBill"]'); await page.waitForTimeout(350);
+  assert.doesNotMatch(await page.$eval('#title', e => e.textContent), /Something broke/);
+  assert.equal(await page.$$eval('[data-act="billSkip"][data-i="3"]', e => e.length), 12, 'the new bill has its twelve months');
+  await page.click('[data-act="billSkip"][data-i="3"][data-m="2"]'); await page.waitForTimeout(300);
+  assert.deepEqual((await stored(page)).money.bills[3].skip, [2]);
+});
+
+test('Enter in a dialog means OK, not Cancel', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money', sec: 'saving' });
+  const before = (await stored(page)).money.savings.balance || 0;
+  await page.click('[data-act="savMove"][data-d="1"]'); await page.waitForTimeout(250);
+  await page.fill('#dlgIn', '150'); await page.press('#dlgIn', 'Enter'); await page.waitForTimeout(400);
+  assert.equal((await stored(page)).money.savings.balance, before + 150);
+  assert.equal(await page.$eval('#dlgForm', f => f.hasAttribute('data-val')), false, 'and what was typed is not left on the form');
+});
+
+test('a backup with rubbish in its lists restores what it can, and a bad file changes nothing', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)) });
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  const bad = JSON.parse(JSON.stringify(SAMPLE));
+  bad.money.bills = [null, { id: '9', name: 'Gym', amount: 30, dueDay: 5, started: '2024-01', ended: '2027-03-31' }, 7];
+  bad.pay.rises = [null]; bad.games = [{ id: 'x', game: 'Tetris', date: 20260101 }];
+  await page.setInputFiles('#importFile', { name: 'b.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(bad)) });
+  await page.waitForTimeout(500);
+  let s = await stored(page);
+  assert.deepEqual(s.money.bills.map(b => [b.name, b.ended]), [['Gym', '2027-03']], 'the one real bill, its end cut to a month');
+  assert.equal(s.games[0].date, null, 'a date that is not a date is dropped');
+  for (const tabName of ['home', 'pay', 'money', 'games']) {
+    await page.click(`.tabs button[data-tab="${tabName}"]`); await page.waitForTimeout(200);
+    assert.doesNotMatch(await page.$eval('#title', e => e.textContent), /Something broke/, tabName);
+  }
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  await page.setInputFiles('#importFile', { name: 'c.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') });
+  await page.waitForTimeout(400);
+  assert.match(await page.$eval('#toast', e => e.textContent), /isn't a backup/);
+  assert.deepEqual((await stored(page)).money.bills.map(b => b.name), ['Gym'], 'and the bad file left things as they were');
+});
+
+test('a date that has to be there cannot be cleared, and a garbled number is not stored', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'pay' });
+  await page.click('details[data-key="yourpay"] summary'); await page.waitForTimeout(200);
+  assert.equal(await page.$eval('[data-set="pay.nextPayDay"]', e => e.value), '2026-09-25', 'the pay day coming, not the old anchor');
+  await page.fill('[data-set="pay.nextPayDay"]', ''); await page.waitForTimeout(350);
+  assert.match(await page.$eval('#toast', e => e.textContent), /needs a date/);
+  assert.equal(await page.$eval('[data-set="pay.nextPayDay"]', e => e.value), '2026-09-25', 'put back as it was');
+  assert.ok(['2026-08-28', '2026-09-25'].includes((await stored(page)).pay.nextPayDay), 'the same four-weekly cycle either way');
+  assert.doesNotMatch(await page.$eval('#title', e => e.textContent), /Something broke/);
+
+  await page.click('.tabs button[data-tab="money"]'); await page.waitForTimeout(250);
+  await page.$eval('[data-set="money.buffer"]', el => { el.value = ''; });
+  await page.focus('[data-set="money.buffer"]'); await page.keyboard.type('-');
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).money.buffer, 300, 'a lone minus sign does not wipe the buffer');
+});
+
+test('undoing an edit does not un-date the backup downloaded after it', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  page.on('download', d => d.cancel().catch(() => {}));
+  await page.fill('[data-set="money.buffer"]', '450');
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(300);
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  await page.click('[data-act="export"]'); await page.waitForTimeout(400);
+  await page.click('#undoBtn'); await page.waitForTimeout(400);
+  const s = await stored(page);
+  assert.equal(s.money.buffer, 300, 'the edit is undone');
+  assert.equal(s.backupOn, '2026-09-09', 'the download still happened');
+});
+
+test('an Undo left in an old toast is withdrawn once something newer changes', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money', sec: 'bills' });
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  await page.click('[data-act="delBill"][data-i="1"]'); await page.waitForTimeout(250);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
+  assert.ok(await page.$eval('#toast', e => e.classList.contains('show')), 'Removed Council Tax · Undo');
+  await page.fill('[data-set="money.bills.0.name"]', 'Rent (flat)');
+  await page.dispatchEvent('[data-set="money.bills.0.name"]', 'change'); await page.waitForTimeout(350);
+  assert.equal(await page.$eval('#toast', e => e.classList.contains('show')), false, 'its Undo would now take back the rename');
+});
+
+test('a bill on pay day comes out of the pay, and this week runs past pay day', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [{ id: 'r', name: 'Rent', category: 'Housing', amount: 780, dueDay: 25, started: '2024-01' },
+    { id: 'g', name: 'Gym', category: 'Health & Fitness', amount: 30, dueDay: 28, started: '2024-01' }];
+  Object.assign(data.money, { balance: 100, balanceOn: '2026-09-23', buffer: 0, overdraft: 0, amex: null });
+  const page = await open(t, { on: '2026-09-23', data });
+  assert.doesNotMatch(await page.$eval('#view', e => e.textContent), /Short before pay day/, 'pay lands with the rent');
+  const week = await page.$$eval('.ledger .lrow', rs => rs.map(r => r.querySelector('.ln b').textContent));
+  assert.deepEqual(week, ['Pay day', 'Rent', 'Gym'], 'pay first on the day, and Monday\'s gym is still this week');
+
+  await page.click('.tabs button[data-tab="money"]'); await page.waitForTimeout(250);
+  const res = await page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' '));
+  assert.match(res, /Rent on pay day, out of the pay\s*-£780\.00/);
+  assert.match(res, /Balance after pay\s*£1,865\.41/, '100 + 2,545.41 - 780');
+});
+
+test('a new rate applies from today, not back to the statement', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.debts = [{ id: 'm', name: 'Mortgage', type: 'Long-term', balance: 197572.08, repayment: 958.41, apr: 0.041, balanceOn: '2025-11-10' }];
+  const page = await open(t, { on: '2026-09-26', data, tab: 'money', sec: 'saving' });
+  await page.click('[data-act="toggle"][data-key="editDebts"]'); await page.waitForTimeout(250);
+  await page.fill('[data-set="money.debts.0.apr"]', '5.5');
+  await page.dispatchEvent('[data-set="money.debts.0.apr"]', 'change'); await page.waitForTimeout(350);
+  const d = (await stored(page)).money.debts[0];
+  assert.deepEqual([d.balance, d.balanceOn, d.apr], [194694.39, '2026-09-26', 0.055], 'carried to today on the old rate first');
+});
+
+test('Home shows the three most pressing things first', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.backupOn = null;
+  Object.assign(data.money, { balance: 50, balanceOn: '2026-08-29', buffer: 0, overdraft: 0 });
+  data.money.bills.push({ id: 'u', name: 'Gym', category: 'Other', amount: 30, dueDay: null, started: '2024-01' });
+  data.money.debts = [{ id: 'd', name: 'Loan', type: 'Short-term', balance: 900, repayment: 90, apr: null, balanceOn: '2026-06-01' }];
+  const page = await open(t, { on: '2026-09-09', data });
+  const rows = () => page.$$eval('.attnrow', rs => rs.map(r => r.className.includes('bad')));
+  const first = await rows();
+  assert.equal(first.length, 3, 'three at a time');
+  assert.deepEqual(first.slice(0, 2), [true, true], 'the red ones at the top');
+  await page.click('[data-act="toggle"][data-key="attnAll"]'); await page.waitForTimeout(250);
+  assert.ok((await rows()).length > 3, 'and the rest a tap away');
+});
+
+test('undated games sit at the bottom of the log, and a game dated ahead is not the last one finished', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.games = [{ id: 'a', game: 'Halo', date: null, notes: '' }, { id: 'b', game: 'DOOM 64', date: '2026-08-14', notes: '' },
+    { id: 'c', game: 'Zelda', date: '2026-09-15', notes: '' }];
+  const page = await open(t, { on: '2026-09-09', data });
+  assert.match(await page.$eval('#view', e => e.textContent.replace(/\s+/g, ' ')), /DOOM 64\s*last completed · 26 days ago/);
+  await page.click('.tabs button[data-tab="games"]'); await page.waitForTimeout(250);
+  assert.deepEqual(await page.$$eval('.yearhead', hs => hs.map(h => h.textContent.split(' ·')[0])), ['2026', 'undated']);
+});
+
+test('a half-typed game survives an edit elsewhere on the page', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'games' });
+  await page.fill('#g_name', 'Metroid Prime');
+  await page.fill('#g_notes', '100%');
+  await page.fill('textarea[data-set="goals"]', 'Finish the backlog');
+  await page.dispatchEvent('textarea[data-set="goals"]', 'change'); await page.waitForTimeout(350);
+  assert.equal(await page.$eval('#g_name', e => e.value), 'Metroid Prime');
+  assert.equal(await page.$eval('#g_notes', e => e.value), '100%');
+});
+
+test('tapping a field\'s label focuses the field', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  await page.click('label:text-is("Buffer to keep back")');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.set), 'money.buffer');
+  assert.equal(await page.$eval('[data-set="money.balance"]', e => e.labels.length), 1, 'the balance is named by its label');
+});
+
+test('a theme picked in Settings reaches dialogs and the browser\'s own controls', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)) });
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  await page.click('[data-act="theme"][data-v="dark"]'); await page.waitForTimeout(200);
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme), 'dark');
+  await page.click('.tabs button[data-tab="money"]'); await page.click('[data-act="moneyTab"][data-v="saving"]'); await page.waitForTimeout(250);
+  await page.click('[data-act="savMove"][data-d="1"]'); await page.waitForTimeout(250);
+  const ink = await page.$eval('#dlgForm h3', e => getComputedStyle(e).color);
+  assert.notEqual(ink, 'rgb(0, 0, 0)', 'the title is not left black on the dark card');
+  await page.click('#dlgForm button[value="cancel"]');
+});
+
+test('a second click of a double-click does not remove the next pay change too', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.rises = [{ from: '2026-04-01', salary: 42000, arrearsOn: '', otBackpay: true }, { from: '2027-04-01', salary: 43000, arrearsOn: '', otBackpay: true }];
+  const page = await open(t, { data, tab: 'pay' });
+  await page.click('details[data-key="rises"] summary'); await page.waitForTimeout(200);
+  await page.dblclick('[data-act="delRise"][data-i="0"]'); await page.waitForTimeout(400);
+  assert.equal((await stored(page)).pay.rises.length, 1);
+});
+
+test('with no key in hand, nothing is written over data another copy has encrypted', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  // what the other tab would have left behind after turning its PIN on
+  await page.evaluate(() => localStorage.setItem('decs-stuff-v1', JSON.stringify({ decsEnc: 1, iters: 310000, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iv: 'AAAAAAAAAAAAAAAA', ct: 'AAAA' })));
+  await page.fill('[data-set="money.buffer"]', '450');
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change');
+  await page.waitForSelector('#lock:not([hidden])', { timeout: 5000 });
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).decsEnc, 1, 'still sealed');
+});
+
+test('a PIN sealed at an older strength still opens, and is resealed at today\'s', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)) });
+  await page.evaluate(async () => {
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode('482913'), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, base,
+      { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(localStorage.getItem('decs-stuff-v1')));
+    const b = a => btoa(String.fromCharCode(...new Uint8Array(a)));
+    localStorage.setItem('decs-stuff-v1', JSON.stringify({ decsEnc: 1, iters: 100000, salt: b(salt), iv: b(iv), ct: b(ct) }));
+  });
+  for (let round = 0; round < 2; round++) {
+    await page.reload();
+    await page.waitForSelector('#lock:not([hidden])', { timeout: 5000 });
+    await page.fill('#pinIn', '482913'); await page.click('#lockGo');
+    await page.waitForSelector('#view .card', { timeout: 10000 });
+    await page.waitForTimeout(600);
+    assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem('decs-stuff-v1'))).iters, 310000, `round ${round}`);
+  }
+});
+
+test('a failed save is said once, and saving picks up again when it can', skip, async t => {
+  const page = await open(t, { data: JSON.parse(JSON.stringify(SAMPLE)), tab: 'money' });
+  await page.evaluate(() => { window.__set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function () { throw new DOMException('full', 'QuotaExceededError'); }; });
+  await page.fill('[data-set="money.buffer"]', '450');
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(400);
+  assert.match(await page.$eval('#toast', e => e.textContent), /Could not save/);
+  await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(250);
+  assert.match(await page.$eval('#view', e => e.textContent), /isn't saving changes/);
+  await page.evaluate(() => { Storage.prototype.setItem = window.__set; });
+  await page.click('.tabs button[data-tab="money"]'); await page.waitForTimeout(250);
+  await page.fill('[data-set="money.buffer"]', '500');
+  await page.dispatchEvent('[data-set="money.buffer"]', 'change'); await page.waitForTimeout(400);
+  assert.equal((await stored(page)).money.buffer, 500, 'the next change is kept');
 });

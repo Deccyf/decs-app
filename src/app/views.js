@@ -65,7 +65,7 @@ const moneySwitcher = sec => `<div class="subnav">${segment('moneyTab', sec, MON
 /* ---------- views ---------- */
 const VIEWS = {
   home() {
-    const m = C.moneyCalc(S.money, null, flowOpt()), p = C.payCalc(S.pay), g = C.gamesStats(S.games), cols = C.collections(S);
+    const m = C.moneyCalc(S.money, null, flowOpt()), p = payCalcNow(), g = C.gamesStats(S.games), cols = C.collections(S);
     const nx = p.rows[p.nextIdx] || null, tod = C.today();
     const fl = C.runway(S.money, p, flowOpt());
     const per = C.periodFlows(S.money, p, flowOpt(), 1)[0] || null;
@@ -74,8 +74,10 @@ const VIEWS = {
     let h = '';
     if (SEED.generic && !S.money.months.length && !S.money.bills.length && !S.games.length && !S.classic.length)
       h += `<div class="banner"><b>No data loaded yet.</b> Tap the gear at the top, then <b>Restore backup</b> and pick your backup file. Everything appears straight away.</div>`;
+    if (unreadable)
+      h += `<div class="banner bad"><b>Some saved data couldn't be read.</b> It has been kept to one side rather than saved over${saveFrozen ? ', and nothing is being saved until it is sorted' : ''} — restore your latest backup to get the figures back.</div>`;
     if (!storageOK)
-      h += `<div class="banner bad"><b>This device isn't keeping changes.</b> Your browser won't store data for a file opened directly. Anything you change is lost when you close the page — use Download backup before you leave, or host the file (GitHub Pages) so it can save.</div>`;
+      h += `<div class="banner bad"><b>This device isn't saving changes.</b> The browser refused — it may be out of space, or in a private window. Download a backup before you close the app; saving picks up again on its own once it can.</div>`;
 
     /* Things that want a decision today, each with the one tap that deals with
        it. The card only exists when there is something in it. */
@@ -105,35 +107,47 @@ const VIEWS = {
     }
     // a destination is either a tab of its own or a section of Money
     const OWNTAB = { settings: 1, pay: 1 };
-    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attn.map(([lvl, text, dest, payday]) => {
+    /* The red ones first, then the rest in the order they were raised; and
+       three at a time, or a long list pushes the figures off the screen. */
+    attn.sort((a, b) => (b[0] === 'bad') - (a[0] === 'bad'));
+    const attnShown = ui.attnAll ? attn : attn.slice(0, 3);
+    if (attn.length) h += `<div class="card"><h2>Needs a look<span class="hint">${attn.length}</span></h2>${attnShown.map(([lvl, text, dest, payday]) => {
       const t = OWNTAB[dest] ? dest : 'money';
       return `<button class="attnrow ${lvl}" data-act="tab" data-tab="${t}"${t === 'money' ? ` data-sec="${esc(dest)}"` : ''}${
         payday ? ` data-payday="${esc(payday)}"` : ''}><span>${text}</span><i aria-hidden="true">›</i></button>`;
-    }).join('')}</div>`;
+    }).join('')}${attn.length > 3 ? `<button class="attnmore" data-act="toggle" data-key="attnAll">${ui.attnAll ? 'Show fewer' : `Show all ${attn.length}`}</button>` : ''}</div>`;
 
     h += `<div class="tiles">
       ${fl.hasBal
         ? tile(fl.safe < 0 ? 'coral' : 'teal', 'Safe to spend', C.gbp(fl.safe, 0),
-            fl.safe > 0 && fl.perDay != null && fl.days > 0 ? C.gbp(fl.perDay, 0) + ' a day for ' + fl.days + ' days'
-              : fl.safe < 0 ? 'short before ' + esc(C.fmtDM(fl.to)) : 'pay day is today')
+            fl.safe > 0 && fl.perDay != null && fl.days > 0 ? C.gbp(fl.perDay, 0) + ' a day for ' + fl.days + ' day' + (fl.days === 1 ? '' : 's')
+              : (fl.safe < 0 ? 'short before ' : 'nothing spare before ') + esc(C.fmtDM(fl.to)))
         : tile('teal', 'Disposable next period', per ? C.gbp(per.disposable, 0) : '–',
             per ? C.gbp(per.net, 0) + ' pay less ' + C.gbp(per.outgoings, 0) + ' bills' : 'add your pay details')}
-      ${tile('navy', 'Next pay day', nx ? C.gbp(nx.net, 0) : '–', nx ? (fl.days === 0 ? 'today' : 'in ' + fl.days + ' day' + (fl.days === 1 ? '' : 's')) + ' · ' + esc(C.fmtDow(nx.payday)) : '')}
-      ${tile('amber', 'Saved this year', C.gbp(yr && yr.saved, 0), yr && yr.rate != null ? C.pct(yr.rate) + ' of ' + yr.year + ' earnings' : '')}
+      ${tile('navy', 'Next pay day', nx && S.pay.salary ? C.gbp(nx.net, 0) : '–', !S.pay.salary ? 'add your salary under Pay'
+        : nx ? 'in ' + fl.days + ' day' + (fl.days === 1 ? '' : 's') + ' · ' + esc(C.fmtDow(nx.payday)) : '')}
+      ${tile('amber', yr && yr.year !== tod.slice(0, 4) ? 'Saved in ' + yr.year : 'Saved this year', C.gbp(yr && yr.saved, 0), yr && yr.rate != null ? C.pct(yr.rate) + ' of ' + yr.year + ' earnings' : '')}
       ${tile(pots.net < 0 ? 'coral' : 'forest', 'Savings less ' + (pots.withLong ? 'debt' : 'short-term debt'), C.gbp(pots.net, 0),
         pots.balance || pots.allTotal ? C.gbp(pots.balance, 0) + ' saved · ' + C.gbp(pots.debtTotal, 0) + ' owed' : 'nothing put away yet')}
     </div>`;
 
-    /* the next seven days, with pay day in its place if it falls inside them */
+    /* The next seven days, with pay day in its place if it falls inside them.
+       The week does not stop at pay day: rent three days after it is still
+       this week. Pay lands first thing, so on pay day it goes above that day's bills. */
     const week = C.addDays(tod, 7);
-    const soon = fl.events.filter(e => e.date <= week);
+    const soon = C.billEvents(S.money, C.addDays(tod, 1), week, flowOpt());
     const payInWeek = !!nx && fl.to <= week;
-    const later = fl.events.length - soon.length;
+    const payRow = `<div class="lrow pay"><div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>
+        <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(fl.to)))}</small></div><div class="lv pos">+${C.gbp(fl.net)}</div></div>`;
+    const weekRows = [];
+    let payPlaced = !payInWeek;
+    soon.forEach(e => { if (!payPlaced && e.date >= fl.to) { weekRows.push(payRow); payPlaced = true; } weekRows.push(ledgerRow(e)); });
+    if (!payPlaced) weekRows.push(payRow);
+    const later = fl.events.filter(e => e.date > week);
     h += `<div class="card"><h2>This week<span class="hint">${soon.length ? soon.length + ' leaving' : 'nothing leaving'}${payInWeek ? ' · pay lands' : ''}</span></h2>
-      ${soon.length || payInWeek ? `<div class="ledger">${soon.map(e => ledgerRow(e)).join('')}${payInWeek ? `<div class="lrow pay"><div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>
-        <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(fl.to)))}</small></div><div class="lv pos">+${C.gbp(fl.net)}</div></div>` : ''}</div>`
+      ${weekRows.length ? `<div class="ledger">${weekRows.join('')}</div>`
         : '<div class="empty">Nothing leaves in the next seven days.</div>'}
-      ${later > 0 ? `<div class="note">${later} more before pay day — ${C.gbp(fl.outgoings - soon.reduce((a, e) => a + e.amount, 0))} of them, ${C.gbp(fl.outgoings)} altogether.</div>` : ''}
+      ${later.length ? `<div class="note">${later.length} more before pay day — ${C.gbp(later.reduce((a, e) => a + e.amount, 0))} of them, ${C.gbp(fl.outgoings)} altogether.</div>` : ''}
       <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money" data-sec="now">Open cash flow</button></div></div>`;
 
     if (nx) h += `<div class="card"><div class="eyebrow">Next pay day · ${esc(C.fmtD(nx.payday))}</div>
@@ -142,7 +156,7 @@ const VIEWS = {
       <button class="btn teal" data-act="tab" data-tab="pay">Log hours</button></div>`;
 
     if (pots.balance || pots.goals.length || pots.got.length) {
-      const focus = pots.next || pots.goals[0] || null;    // the next thing you cannot afford yet
+      const focus = pots.next || pots.goals[0] || null;    // the next thing you cannot afford yet; priced ones sort first
       h += `<div class="card"><h2>Saving<span class="hint">${C.gbp(pots.balance, 0)} in the pot</span></h2>
         ${focus ? goalRow(focus) : '<div class="muted">Nothing on the list yet.</div>'}
         <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="money" data-sec="saving">Open savings</button></div></div>`;
@@ -152,14 +166,15 @@ const VIEWS = {
     const tracked = cols.filter(c => c.total), have = tracked.reduce((a, c) => a + c.have, 0), all = tracked.reduce((a, c) => a + c.total, 0);
     h += `<div class="card"><h2>Everything else</h2>
       <div class="stats"><div class="stat"><b>${g.thisYear}</b><span>games this year</span></div><div class="stat"><b>${tot ? done + '/' + tot : '–'}</b><span>house jobs</span></div><div class="stat"><b>${all ? C.pct(have / all) : '–'}</b><span>collections</span></div></div>
-      ${g.last ? `<div class="row mt4"><div class="l"><b>${esc(g.last.game)}</b><small>last completed · ${g.daysSince} days ago</small></div></div>` : ''}
+      ${g.last ? `<div class="row mt4"><div class="l"><b>${esc(g.last.game)}</b><small>last completed · ${
+        g.daysSince === 0 ? 'today' : g.daysSince === 1 ? 'yesterday' : g.daysSince + ' days ago'}</small></div></div>` : ''}
       <div class="btnrow"><button class="btn ghost sm" data-act="tab" data-tab="lists">Lists</button><button class="btn ghost sm" data-act="tab" data-tab="games">Games</button></div></div>`;
 
     return { title: `${S.name || 'Dec'}'s Tracker`, sub: C.fmtD(tod), html: h };
   },
 
   pay() {
-    const p = C.payCalc(S.pay);
+    const p = payCalcNow();
     let idx = ui.payday ? p.rows.findIndex(x => x.payday === ui.payday) : -1;
     if (idx < 0) idx = p.nextIdx;
     const r = p.rows[idx];
@@ -175,11 +190,14 @@ const VIEWS = {
   },
 
   money() {
-    const opt = flowOpt(), m = C.moneyCalc(S.money, null, opt), p = C.payCalc(S.pay);
+    const opt = flowOpt(), m = C.moneyCalc(S.money, null, opt), p = payCalcNow();
     const fl = C.runway(S.money, p, opt);
     const flows = C.periodFlows(S.money, p, opt, ui.flowPeriods);
     const cur = m.thisMonthKey;
-    const months = m.months.filter(x => ui.showAllMonths || x.month <= C.addMonths(cur + '-01', 1).slice(0, 7)).slice().reverse();
+    // the last twelve months and next month; the rest are one tap away
+    const nextKey = C.addMonths(cur + '-01', 1).slice(0, 7), yearAgo = C.addMonths(cur + '-01', -11).slice(0, 7);
+    const months = m.months.filter(x => ui.showAllMonths || (x.month <= nextKey && x.month >= yearAgo)).slice().reverse();
+    const hiddenMonths = m.months.length - months.length;
 
     const sec = MONEY_SECTIONS.some(x => x.v === ui.moneyTab) ? ui.moneyTab : 'now';
     let h = moneySwitcher(sec);
@@ -196,7 +214,9 @@ const VIEWS = {
           <div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
           ${fl.amexNow ? `<div class="r"><span>AMEX balance, taken off now</span><span class="num neg">-${C.gbp(fl.amexNow)}</span></div>` : ''}
           <div class="r"><span>Balance the morning of pay day</span><span class="num">${C.gbp(fl.atPayday)}</span></div>
+          ${fl.overdraft && fl.low ? `<div class="r"><span>Overdraft left at the lowest point</span><span class="num${fl.headroom < 0 ? ' neg' : ''}">${C.gbp(fl.headroom)}</span></div>` : ''}
           ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>
+          ${fl.onPayOut ? `<div class="r"><span>${fl.onPay.length === 1 ? esc(fl.onPay[0].name) + ' on pay day' : fl.onPay.length + ' bills on pay day'}, out of the pay</span><span class="num neg">-${C.gbp(fl.onPayOut)}</span></div>` : ''}
           ${fl.amexOnPay ? `<div class="r"><span>AMEX cleared on pay day</span><span class="num neg">-${C.gbp(fl.amexOnPay)}</span></div>` : ''}
           <div class="r total"><span>Balance after pay</span><span class="num">${C.gbp(fl.afterPay)}</span></div>` : ''}
         </div>`;
@@ -206,16 +226,16 @@ const VIEWS = {
     } else {
       h += `<div class="banner info">Put today's bank balance in below and this works out what's genuinely free to spend before ${esc(C.fmtD(fl.to))} — bills counted on the day they actually leave.</div>
         <div class="results"><div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
-        ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>` : ''}</div>`;
+        ${fl.net != null ? `<div class="r"><span>Pay in ${esc(C.fmtDM(fl.to))}</span><span class="num pos">+${C.gbp(fl.net)}</span></div>` : ''}
+        ${fl.onPayOut ? `<div class="r"><span>Bills on pay day, out of the pay</span><span class="num neg">-${C.gbp(fl.onPayOut)}</span></div>` : ''}</div>`;
     }
-    h += `${fl.wasCarried ? `<div class="note mt2">Carried forward from the <b>${C.gbp(fl.typed)}</b> you entered on ${esc(C.fmtD(fl.typedOn))}${fl.carriedOut ? `, less <b>${C.gbp(fl.carriedOut)}</b> of bills` : ''}${fl.carriedIn ? `, plus <b>${C.gbp(fl.carriedIn)}</b> of pay` : ''} since.</div>` : ''}
+    h += `${fl.wasCarried || fl.adj ? `<div class="note mt2">${fl.wasCarried ? 'Carried forward from' : 'Worked from'} the <b>${C.gbp(fl.typed)}</b> you entered on ${esc(C.fmtD(S.money.balanceOn))}${fl.carriedOut ? `, less <b>${C.gbp(fl.carriedOut)}</b> of bills` : ''}${fl.carriedIn ? `, plus <b>${C.gbp(fl.carriedIn)}</b> of pay` : ''}${fl.adj ? `, ${fl.adj < 0 ? 'less' : 'plus'} <b>${C.gbp(Math.abs(fl.adj))}</b> paid off the card with Pay now` : ''}${fl.wasCarried ? ' since' : ''}.</div>` : ''}
       ${fl.wasCarried ? detailsBlock('carried', `What's come off since ${C.fmtDM(fl.typedOn)}`,
         `<div class="ledger">${fl.carried.map(e => ledgerRow(e, null, true)).join('')}${fl.carriedPays.map(r => `<div class="lrow gone"><div class="ld"><span>${esc(C.DOW[C.dow(r.payday)])}</span>${+r.payday.slice(8)}</div>
           <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(r.payday)))}</small></div><div class="lv pos">+${C.gbp(r.net)}</div></div>`).join('')}</div>
          <div class="note">Only bills and pay are counted here. Day-to-day spending isn't — so retype your balance whenever you check the bank, and the running total starts again from that figure.</div>`) : ''}
-      <div class="grid2 mt14">${field(fl.typedOn ? `Balance (${C.fmtDM(fl.typedOn)})` : 'Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}
-      ${field('Overdraft limit', inp('money.overdraft', S.money.overdraft, 'number', 'min="0" placeholder="0"'))}
-      ${field('Room left at lowest', `<input type="text" value="${fl.hasBal && fl.low ? esc(C.gbp(fl.headroom)) : '–'}" disabled>`)}</div>
+      <div class="grid2 mt14"><div class="full">${field(fl.typedOn ? `Balance (${C.fmtDM(fl.typedOn)})` : 'Bank balance today', signedInp('money.balance', S.money.balance, 'placeholder="e.g. 1240.50"'))}</div>
+      ${field('Buffer to keep back', inp('money.buffer', S.money.buffer))}${field('Overdraft limit', inp('money.overdraft', S.money.overdraft, 'number', 'min="0" placeholder="0"'))}</div>
       <div class="sep"></div>
       <div class="eyebrow">American Express</div>
       <div class="grid2">${field('Card balance owed', inp('money.amex', S.money.amex, 'number', 'min="0" placeholder="0.00"'))}</div>
@@ -236,15 +256,17 @@ const VIEWS = {
       ${fl.paydayPassed ? `<div class="banner mt12"><b>Pay day has been since you typed this.</b> The figures above are worked forward from ${esc(C.fmtD(fl.typedOn))} — check your bank and retype it.${fl.amex ? ` Paid the card? Press <b>Pay now</b> under American Express.` : ''}</div>`
         : fl.staleDays >= 14 ? `<div class="banner mt12"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
       ${m.undated ? `<div class="banner mt12"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} in <b>Bills</b>.</div>` : ''}
-      ${fl.events.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
-        (() => { let bal = fl.hasBal ? fl.start : null;
-          return fl.events.map(e => { if (bal !== null) bal = C.r2(bal - e.amount); return ledgerRow(e, bal); }).join('')
-            + (fl.net != null ? `<div class="lrow pay"><div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>
-              <div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(fl.to)))}</small></div>
-              <div class="lv pos">+${C.gbp(fl.net)}${fl.hasBal && !fl.amexOnPay ? `<small>${C.gbp(fl.afterPay)}</small>` : ''}</div></div>
-              ${fl.amexOnPay ? `<div class="lrow"><div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>
-                <div class="ln"><b>AMEX cleared</b><small>card balance</small></div>
-                <div class="lv">-${C.gbp(fl.amexOnPay)}${fl.hasBal ? `<small>${C.gbp(fl.afterPay)}</small>` : ''}</div></div>` : ''}` : ''); })()
+      ${fl.events.length || fl.onPay.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
+        (() => { let bal = fl.hasBal ? C.r2(fl.start - fl.amexNow) : null;      // the card is already out if it goes before pay day
+          const run = amt => bal === null ? null : (bal = C.r2(bal + amt));
+          const day = `<div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>`;
+          const small = v => v === null ? '' : `<small class="${v < 0 ? 'neg' : ''}">${C.gbp(v)}</small>`;
+          return fl.events.map(e => ledgerRow(e, run(-e.amount))).join('')
+            + (fl.net != null ? `<div class="lrow pay">${day}<div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(fl.to)))}</small></div>
+              <div class="lv pos">+${C.gbp(fl.net)}${small(run(fl.net))}</div></div>
+              ${fl.onPay.map(e => ledgerRow(e, run(-e.amount))).join('')}
+              ${fl.amexOnPay ? `<div class="lrow">${day}<div class="ln"><b>AMEX cleared</b><small>card balance</small></div>
+                <div class="lv">-${C.gbp(fl.amexOnPay)}${small(run(-fl.amexOnPay))}</div></div>` : ''}` : ''); })()
       }</div>` : ''}
       <div class="sep"></div>${flowOptions()}</div>`;
 
@@ -272,12 +294,12 @@ const VIEWS = {
     /* --- 3. history --- */
     h += `<div class="card"><h2>By year</h2><div class="tscroll"><table class="table"><tr><th>Year</th><th>Earnings</th><th>Bills</th><th>Disposable</th><th>Saved</th><th>Rate</th></tr>
       ${m.byYear.filter(y => y.n || y.saved).map(y => `<tr><td>${y.year}</td><td>${C.gbp(y.earnings, 0)}</td><td>${C.gbp(y.outgoings, 0)}</td><td>${C.gbp(y.disposable, 0)}</td><td>${C.gbp(y.saved, 0)}</td><td>${C.pct(y.rate)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No months filled in yet.</td></tr>'}</table></div>
-      <div class="chartwrap"><canvas id="chart"></canvas></div><div class="chartkey"><span><i class="k-brand"></i>Earnings</span><span><i class="k-teal"></i>Disposable</span><span class="muted">last 12 months — swipe to see them all</span></div></div>`;
+      ${m.last12.length ? `<div class="chartwrap"><canvas id="chart" role="img" aria-label="Earnings and disposable income, month by month, for the last ${m.last12.length} months"></canvas></div><div class="chartkey"><span><i class="k-brand"></i>Earnings</span><span><i class="k-teal"></i>Disposable</span><span class="muted">last 12 months — swipe to see them all</span></div>` : ''}</div>`;
     h += `<div class="card"><h2>Month by month</h2><div class="muted small">Type earnings and what you actually saved. Bills and disposable work themselves out.</div>
       ${months.map(x => { const i = S.money.months.findIndex(q => q.month === x.month); return `<div class="mrow"><div class="mhead"><b>${esc(C.fmtM(x.month))}</b><span class="disp ${x.disposable < 0 ? 'neg' : ''}">${x.has ? C.gbp(x.disposable) : '<span class="muted semi">no earnings yet</span>'}</span></div>
         <div class="mgrid">${field('Earnings', inp(`money.months.${i}.earnings`, x.earnings))}${field('Actually saved', signedInp(`money.months.${i}.saved`, x.saved))}</div>
         ${x.has ? `<div class="note">Bills ${C.gbp(x.outgoings)} · potential savings ${C.gbp(x.potential)} (disposable minus the ${C.gbp(S.money.buffer, 0)} buffer)</div>` : ''}</div>`; }).join('') || '<div class="empty">No months yet.</div>'}
-      <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="showAllMonths">${ui.showAllMonths ? 'Show fewer months' : 'Show all months'}</button><button class="btn sm" data-act="addMonth">Add ${esc(C.fmtM(nextMonthKey()))}</button></div></div>`;
+      <div class="btnrow">${ui.showAllMonths || hiddenMonths ? `<button class="btn ghost sm" data-act="toggle" data-key="showAllMonths">${ui.showAllMonths ? 'Show the last year' : `Show all months (${hiddenMonths} more)`}</button>` : ''}<button class="btn sm" data-act="addMonth">Add ${esc(C.fmtM(nextMonthKey()))}</button></div></div>`;
 
     }
     if (sec === 'bills') {
@@ -294,8 +316,8 @@ const VIEWS = {
           ${field('Price changes in', selPairs(`money.bills.${i}.review`, b.review,
             [{ v: '', l: "Doesn't change" }].concat(C.MON.map((n, k) => ({ v: k + 1, l: n })))))}
           ${b.reviewedOn ? field('Last checked', `<input type="text" value="${esc(C.fmtM(b.reviewedOn))}" disabled>`) : ''}
-          <div class="full"><label>Months it is paid${b.paidMonths < 12 ? ` · ${b.paidMonths} of 12` : ''}</label>${monthPicker(i, b.skip)}</div>
-          <div class="full"><button class="btn danger sm" data-act="delBill" data-i="${i}">Remove ${esc(b.name || 'bill')}</button></div></div>`).join('') || '<div class="empty">No bills yet.</div>'
+          <div class="full field"><label>Months it is paid${b.paidMonths < 12 ? ` · ${b.paidMonths} of 12` : ''}</label>${monthPicker(i, b.skip)}</div>
+          <div class="full"><button class="btn danger sm" data-act="delBill" data-i="${i}" aria-label="Remove ${esc(b.name || 'this bill')}">Remove this bill</button></div></div>`).join('') || '<div class="empty">No bills yet.</div>'
         : m.bills.map(billRow).join('') || '<div class="empty">No bills yet.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editBills">${ui.editBills ? 'Done' : 'Edit bills'}</button>${ui.editBills ? '<button class="btn sm" data-act="addBill">Add bill</button>' : ''}</div>
       ${(() => { const cats = Object.entries(m.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
@@ -350,7 +372,7 @@ const VIEWS = {
         <div class="sep"></div>` : ''}
       ${ui.editGoals ? S.money.savings.goals.map((g, i) => `<div class="erow"><div class="full">${field('Saving for', inp(`money.savings.goals.${i}.name`, g.name, 'text'))}</div>
           ${field('What it costs', inp(`money.savings.goals.${i}.cost`, g.cost))}${field('Got it on', inp(`money.savings.goals.${i}.got`, g.got, 'date'))}
-          <div class="full"><button class="btn danger sm" data-act="delGoal" data-id="${esc(g.id)}">Remove ${esc(g.name || 'this')}</button></div></div>`).join('') || '<div class="empty">Nothing on the list yet.</div>'
+          <div class="full"><button class="btn danger sm" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">Take it off the list</button></div></div>`).join('') || '<div class="empty">Nothing on the list yet.</div>'
         : sv.goals.map(g => goalRow(g, true)).join('') || '<div class="empty">Nothing on the list yet. Add what you are saving up for and the pot gets measured against it.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editGoals">${ui.editGoals ? 'Done' : 'Edit list'}</button><button class="btn sm" data-act="addGoal">Add something</button></div>
       ${sv.got.length ? detailsBlock('gotlist', `Already got (${sv.got.length}) · ${C.gbp(sv.spent, 0)}`, sv.got.map(gotRow).join('')) : ''}
@@ -365,9 +387,9 @@ const VIEWS = {
         It is being carried forward with the whole ${C.gbp(d.repayment)} coming off the balance and no interest going back on,
         which flatters it badly on anything that charges interest. Put the rate in, or type 0 for a genuine 0% deal.</div>`).join('')}
       ${ui.editDebts ? m.debts.map((d, i) => `<div class="erow">${field('Debt', inp(`money.debts.${i}.name`, d.name, 'text'))}${field('Type', sel(`money.debts.${i}.type`, d.type, ['Short-term', 'Long-term']))}
-          ${field(d.now.on ? `Balance (${C.fmtDM(d.now.on)})` : 'Balance', inp(`money.debts.${i}.balance`, d.now.typed || null))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment))}
+          ${field(d.now.on ? `Balance (${C.fmtDM(d.now.on)})` : 'Balance', inp(`money.debts.${i}.balance`, d.now.typed || null))}${field('Monthly repayment', inp(`money.debts.${i}.repayment`, d.repayment, 'number', 'min="0"'))}
           ${field('APR %', pctInp(`money.debts.${i}.apr`, d.apr))}${field('Balance true on', inp(`money.debts.${i}.balanceOn`, d.now.on, 'date'))}
-          ${field('Fixed rate ends', inp(`money.debts.${i}.rateEnds`, d.rateEnds, 'month'))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}">Remove ${esc(d.name || 'debt')}</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
+          ${field('Fixed rate ends', inp(`money.debts.${i}.rateEnds`, d.rateEnds, 'month'))}<div class="full"><button class="btn danger sm" data-act="delDebt" data-i="${i}" aria-label="Remove ${esc(d.name || 'this debt')}">Remove this debt</button></div></div>`).join('') || '<div class="empty">No debts. Nice.</div>'
         : m.debts.map(debtRow).join('') || '<div class="empty">No debts. Nice.</div>'}
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editDebts">${ui.editDebts ? 'Done' : 'Edit debts'}</button>${ui.editDebts ? '<button class="btn sm" data-act="addDebt">Add debt</button>' : ''}</div>
       <div class="note">Balances look after themselves: each repayment comes off on the day it leaves, with interest put back on at a twelfth of the APR, so a mortgage drops by far less than its repayment. When a debt clears, its repayment stops leaving too. Retype a balance off a statement to start it again from that day. Change the rate and any fixed-term reminder is cleared, ready for the new end date. 
@@ -379,7 +401,7 @@ const VIEWS = {
   lists() {
     const done = S.house.filter(j => j.status === 'Done').length, tot = S.house.length;
     let h = `<div class="card"><h2>House jobs</h2><div class="row"><div class="l"><b>${done} of ${tot} done</b></div><div class="num">${C.pct(tot ? done / tot : 0)}</div></div>${bar(tot ? done / tot : 0, 'amber')}
-      <div class="mt4">${ui.editJobs ? S.house.map((j, i) => `<div class="erow"><div class="full">${field('Job', inp(`house.${i}.job`, j.job, 'text'))}</div>${field('Date done', inp(`house.${i}.dateDone`, j.dateDone, 'date'))}${field('Notes', inp(`house.${i}.notes`, j.notes, 'text'))}<div class="full"><button class="btn danger sm" data-act="delJob" data-i="${i}">Remove ${esc(j.job || 'job')}</button></div></div>`).join('') || '<div class="empty">No jobs yet.</div>'
+      <div class="mt4">${ui.editJobs ? S.house.map((j, i) => `<div class="erow"><div class="full">${field('Job', inp(`house.${i}.job`, j.job, 'text'))}</div>${field('Date done', inp(`house.${i}.dateDone`, j.dateDone, 'date'))}${field('Notes', inp(`house.${i}.notes`, j.notes, 'text'))}<div class="full"><button class="btn danger sm" data-act="delJob" data-i="${i}" aria-label="Remove ${esc(j.job || 'this job')}">Remove this job</button></div></div>`).join('') || '<div class="empty">No jobs yet.</div>'
         : S.house.map((j, i) => `<div class="row"><div class="l"><b class="${j.status === 'Done' ? 'done' : ''}">${esc(j.job)}</b><small>${j.dateDone ? esc(C.fmtD(j.dateDone)) : ''}${j.notes ? (j.dateDone ? ' · ' : '') + esc(j.notes) : ''}</small></div><button class="status ${j.status.replace(' ', '')}" data-act="cycle" data-i="${i}">${esc(j.status)}</button></div>`).join('') || '<div class="empty">No jobs yet.</div>'}</div>
       <div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editJobs">${ui.editJobs ? 'Done' : 'Edit jobs'}</button>${ui.editJobs ? '<button class="btn sm" data-act="addJob">Add job</button>' : ''}</div>
       <div class="note">Tap a status to move it on: To do → In progress → Done (sets today's date).</div></div>`;
@@ -403,10 +425,12 @@ const VIEWS = {
 
   games() {
     const g = C.gamesStats(S.games);
-    const years = [...new Set(S.games.map(x => (x.date || '').slice(0, 4) || 'undated'))].sort().reverse();
+    // newest year first, and anything without a date at the bottom rather than above them all
+    const years = [...new Set(S.games.map(x => (x.date || '').slice(0, 4) || 'undated'))]
+      .sort((a, b) => (a === 'undated') - (b === 'undated') || b.localeCompare(a));
     let h = `<div class="card"><div class="stats"><div class="stat"><b>${g.thisYear}</b><span>this year</span></div><div class="stat"><b>${g.lastYear}</b><span>last year</span></div><div class="stat"><b>${g.total}</b><span>all time</span></div></div></div>`;
-    h += `<div class="card"><h2>Completed a game?</h2><div class="grid2"><div class="field full"><label>Game</label><input type="text" id="g_name" placeholder="e.g. DOOM 64"></div>
-      ${field('Date', `<input type="date" id="g_date" value="${C.today()}">`)}${field('Notes (optional)', `<input type="text" id="g_notes" placeholder="Easy · bad ending · again…">`)}</div>
+    h += `<div class="card"><h2>Completed a game?</h2><div class="grid2"><div class="field full"><label for="g_name">Game</label><input type="text" id="g_name" placeholder="e.g. DOOM 64" value="${esc(ui.game.name)}"></div>
+      ${field('Date', `<input type="date" id="g_date" value="${esc(ui.game.date || C.today())}">`)}${field('Notes (optional)', `<input type="text" id="g_notes" placeholder="Easy · bad ending · again…" value="${esc(ui.game.notes)}">`)}</div>
       <div class="btnrow"><button class="btn teal" data-act="addGame">Add to log</button></div></div>`;
     h += `<div class="card"><h2>Goals</h2><div class="field"><textarea data-set="goals" rows="3" aria-label="Goals">${esc(S.goals || '')}</textarea></div></div>`;
     h += `<div class="card"><h2>Log</h2>${years.map(y => { const list = S.games.filter(x => ((x.date || '').slice(0, 4) || 'undated') === y).sort((a, b) => (b.date || '').localeCompare(a.date || '')); return `<div class="yearhead">${esc(y)} · ${list.length}</div>${list.map(x => `<div class="row"><div class="l"><b>${esc(x.game)}</b><small>${x.date ? esc(C.fmtD(x.date)) : 'no date'}${x.notes ? ' · ' + esc(x.notes) : ''}</small></div><button class="del" data-act="delGame" data-id="${esc(x.id)}" aria-label="Remove ${esc(x.game)}">×</button></div>`).join('')}`; }).join('') || '<div class="empty">Nothing logged yet.</div>'}</div>`;

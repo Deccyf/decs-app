@@ -50,12 +50,15 @@ function render(keepScroll = true) {
   window.scrollTo(0, keepScroll ? y : 0);
   restoreFocus(focus);
 }
+/* undefined means "could not read that" — a lone minus sign, 9e999 — which is
+   not the same as a box cleared on purpose, and must not wipe the figure. */
 function parseInput(el) {
   if (el.type === 'checkbox') return el.checked;
   if (el.type === 'number') {
+    if (el.validity && el.validity.badInput) return undefined;
     if (el.value === '') return null;
     const v = parseFloat(el.value);
-    if (isNaN(v)) return null;
+    if (!isFinite(v)) return undefined;
     // 4.1 / 100 is 0.040999999999999995 in binary, which is what would get stored
     return el.dataset.kind === 'pct' ? Math.round(v * 1e4) / 1e6 : v;
   }
@@ -67,6 +70,8 @@ document.addEventListener('click', async e => {
   const t = e.target.closest('[data-act]'); if (!t) return;
   const a = t.dataset.act, d = t.dataset;
   if (!S && a !== 'forgotPin') return;                 // still locked; nothing to act on
+  // the second click of a double-click lands on whatever slid up under the pointer
+  if (e.detail > 1 && a.startsWith('del')) return;
   if (a === 'tab') { tab = d.tab; if (d.sec) ui.moneyTab = d.sec;
     if (d.payday) { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; }   // land on the one being asked about
     render(false); return; }
@@ -76,16 +81,16 @@ document.addEventListener('click', async e => {
   if (a === 'yeartoggle') { ui.openYears[d.y] = !ui.openYears[d.y]; render(); return; }
   if (a === 'undo') { undo(); return; }
   if (a === 'redo') { redo(); return; }
-  if (a === 'hstep') { const h = S.pay.hours[d.payday] = S.pay.hours[d.payday] || {}; h[d.kind] = Math.max(0, C.num(h[d.kind]) + (+d.d)); if (!h.ot && !h.sun) delete S.pay.hours[d.payday]; commit('the hours'); return; }
+  if (a === 'hstep') { const h = S.pay.hours[d.payday] = S.pay.hours[d.payday] || {}; h[d.kind] = Math.max(0, C.r2(C.num(h[d.kind]) + (+d.d))); if (!h.ot && !h.sun) delete S.pay.hours[d.payday]; commit('the hours'); return; }
   if (a === 'toggle') { ui[d.key] = !ui[d.key]; render(); return; }
   if (a === 'shift') { S.money.dueShift = d.v; commit('the due-date setting'); return; }
   if (a === 'sign') {
     const wrap = t.closest('.signed'), el = wrap && wrap.querySelector('input');
     if (!el) return;
     const raw = el.value.trim();
-    if (raw === '' || isNaN(parseFloat(raw))) { el.focus(); toast('Type the amount first, then tap ±'); return; }
+    if (raw === '' || !isFinite(parseFloat(raw))) { el.focus(); toast('Type the amount first, then tap ±'); return; }
     setPath(S, el.dataset.set, -parseFloat(raw));
-    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); S.money.amexUndo = null; logBalance(0); }
+    if (el.dataset.set === 'money.balance') balanceFixed();
     commit('flipping the sign'); return;
   }
   if (a === 'morePeriods') { ui.flowPeriods = ui.flowPeriods >= 12 ? 4 : ui.flowPeriods + 4; render(); return; }
@@ -107,12 +112,14 @@ document.addEventListener('click', async e => {
   }
   if (a === 'billSkip') {
     const b = S.money.bills[+d.i]; if (!b) return;
+    if (!Array.isArray(b.skip)) b.skip = [];
     const mo = +d.m, at = b.skip.indexOf(mo);
     if (at >= 0) b.skip.splice(at, 1); else { b.skip.push(mo); b.skip.sort((x, y) => x - y); }
     commit(`the months for ${b.name || 'that bill'}`);
     return;
   }
-  if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null }); commit('adding a bill'); return; }
+  if (a === 'addBill') { S.money.bills.push({ id: uid(), name: '', category: 'Other', amount: null, dueDay: null, started: C.mkey(C.today()), ended: null, link: null,
+    skip: [], review: null, reviewedOn: null }); commit('adding a bill'); return; }
   if (a === 'delBill') { const b = S.money.bills[+d.i]; if (await confirmDlg('Remove this bill?', esc(b.name || ''))) { drop(S.money.bills, b); removed(b.name || 'a bill'); } return; }
   if (a === 'addMonth') { const k = nextMonthKey(); if (!S.money.months.some(x => x.month === k)) { S.money.months.push({ month: k, earnings: null, saved: null }); S.money.months.sort((a, b) => a.month.localeCompare(b.month)); commit(`adding ${C.fmtM(k)}`); toast('Added ' + C.fmtM(k)); } return; }
   /* Money in and out of the pot as it happens: the amount moved, not a new
@@ -139,7 +146,7 @@ document.addEventListener('click', async e => {
     const sv = S.money.savings, g = sv.goals.find(x => x.id === d.id);
     if (!g) return;
     const name = g.name || 'it';
-    const v = await dialog({ title: `Got ${esc(name)}?`,
+    const v = await dialog({ title: `Got ${name}?`,
       body: `${C.gbp(C.num(sv.balance))} in the pot. Change the figure if you paid something else.`,
       ok: 'Take it out', cancel: 'Not yet', input: C.num(g.cost) || '', inputType: 'number' });
     if (v === null) return;
@@ -166,29 +173,35 @@ document.addEventListener('click', async e => {
   if (a === 'addFixed') { S.pay.fixed.push({ name: '', amount: null, treatment: 'After-tax', from: '', to: '' }); ui.editFixed = true; commit('adding an item'); return; }
   if (a === 'delFixed') { const f = S.pay.fixed[+d.i]; S.pay.fixed.splice(+d.i, 1); removed(f && f.name || 'an item'); return; }
   if (a === 'addGame') { const n = $('#g_name').value.trim(); if (!n) { toast('Type the game first'); $('#g_name').focus(); return; }
-    S.games.push({ id: uid(), game: n, date: $('#g_date').value || null, notes: $('#g_notes').value.trim() }); commit(`adding ${n}`); toast('Added to log'); return; }
+    S.games.push({ id: uid(), game: n, date: $('#g_date').value || null, notes: $('#g_notes').value.trim() });
+    ui.game = { name: '', date: null, notes: '' }; commit(`adding ${n}`); toast('Added to log'); return; }
   if (a === 'delGame') { const g = S.games.find(x => x.id === d.id);
     if (await confirmDlg('Remove from the log?', esc(g ? g.game : ''))) { S.games = S.games.filter(x => x.id !== d.id); removed(g ? g.game : 'a game'); } return; }
+  /* The card comes off the balance as it stands today — bills and pay carried
+     since it was typed included — rather than off the old typed figure, and
+     the reading keeps its date: the app moved this money, the bank did not
+     say so. The next balance typed takes the adjustment with it. */
   if (a === 'amexClear') {
-    const amt = Math.abs(C.num(S.money.amex));
+    const m = S.money, amt = Math.abs(C.num(m.amex));
     if (!amt) { toast('No card balance to clear'); return; }
-    // snapshot first so this is exactly reversible
-    S.money.amexUndo = { balance: S.money.balance, balanceOn: S.money.balanceOn, amex: S.money.amex,
-      at: C.today(), logLen: S.money.balanceLog.length };
-    S.money.balance = C.r2(C.num(S.money.balance) - amt);
-    S.money.balanceOn = C.today();
-    S.money.amex = 0;
-    logBalance(-amt);                                  // the drop is the card, not a day out
+    const hasBal = m.balance !== null && m.balance !== undefined && m.balance !== '';
+    m.amexUndo = { amex: m.amex, adj: C.num(m.balanceAdj), at: C.today() };     // exactly what it takes to put back
+    m.amex = 0;
+    if (hasBal) m.balanceAdj = C.r2(C.num(m.balanceAdj) - amt);
     commit('paying the card');
-    toast(`${C.gbp(amt)} off your balance — undo is right there`);
+    toast(hasBal ? `${C.gbp(amt)} off your balance — undo is right there` : 'Card cleared — there is no bank balance to take it off');
     return;
   }
   if (a === 'amexUndo') {
-    const u = S.money.amexUndo;
+    const m = S.money, u = m.amexUndo;
     if (!u) return;
-    S.money.balance = u.balance; S.money.balanceOn = u.balanceOn; S.money.amex = u.amex;
-    if (u.logLen != null) S.money.balanceLog.length = Math.min(u.logLen, S.money.balanceLog.length);
-    S.money.amexUndo = null;
+    m.amex = u.amex;
+    if (u.adj !== undefined) m.balanceAdj = u.adj;
+    else {                                             // saved by the version that rewrote the balance
+      m.balance = u.balance; m.balanceOn = u.balanceOn;
+      if (u.logLen != null) m.balanceLog.length = Math.min(u.logLen, m.balanceLog.length);
+    }
+    m.amexUndo = null;
     commit('putting the card back');
     toast('Put back');
     return;
@@ -225,13 +238,31 @@ function fieldLabel(el) {
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'importFile') { if (el.files[0]) importBackup(el.files[0]); el.value = ''; return; }
-  if (el.dataset.hours) { const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.num(el.value)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit('the hours'); return; }
+  if (el.dataset.hours) { const hv = C.num(el.value); if (!isFinite(hv)) { toast("That isn't a number — left as it was"); render(); return; }
+    const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.r2(hv)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit('the hours'); return; }
+  const val = el.dataset.set ? parseInput(el) : null;
+  // a figure the keyboard could not make sense of, or a date that must be there, is refused rather than wiped
+  if (el.dataset.set && (val === undefined || (val === null && el.required))) {
+    toast(val === undefined ? "That isn't a number — left as it was" : 'That needs a date — left as it was'); render(); return;
+  }
   const amt = el.dataset.set && el.dataset.set.match(/^money\.bills\.(\d+)\.amount$/);
-  if (amt) { billAmountChanged(+amt[1], parseInput(el)); return; }
+  if (amt) { billAmountChanged(+amt[1], val); return; }
   if (el.dataset.set) {
-    setPath(S, el.dataset.set, parseInput(el));
-    if (el.dataset.set === 'money.balance') { S.money.balanceOn = C.today(); logBalance(0); }   // stamp it so a stale figure is obvious
-    if (el.dataset.set === 'money.balance' || el.dataset.set === 'money.amex') S.money.amexUndo = null;
+    /* New terms apply from today. Without this, typing the new rate when a fix
+       ends re-ran the whole carry since the statement at that rate, and moved
+       a mortgage by thousands for months already paid at the old one. A blank
+       APR is different: that was never a rate, just a missing one, so filling
+       it in reworks the carry from the statement, which is the honest figure. */
+    const dt = el.dataset.set.match(/^money\.debts\.(\d+)\.(apr|repayment)$/);
+    const dtd = dt && S.money.debts[+dt[1]];
+    if (dtd) { const now = C.debtNow(dtd, S.money, C.today(), flowOpt());
+      if (now.carried && !now.noRate) { dtd.balance = now.balance; dtd.balanceOn = C.today(); } }
+    setPath(S, el.dataset.set, val);
+    if (el.dataset.set === 'money.balance') balanceTyped();        // stamped, so a stale figure is obvious
+    if (el.dataset.set === 'money.amex') S.money.amexUndo = null;
+    // saying when a bill changes price is knowing its price now: the first check is next time round
+    const rv = el.dataset.set.match(/^money\.bills\.(\d+)\.review$/);
+    if (rv && S.money.bills[+rv[1]]) S.money.bills[+rv[1]].reviewedOn = C.mkey(C.today());
     // a debt balance is read off a statement, so stamp the day it was true
     const db = el.dataset.set.match(/^money\.debts\.(\d+)\.balance$/);
     if (db && S.money.debts[+db[1]]) S.money.debts[+db[1]].balanceOn = C.today();
@@ -242,7 +273,16 @@ document.addEventListener('change', e => {
     commit(fieldLabel(el));
   }
 });
-document.addEventListener('input', e => { if (e.target.id === 'search') { ui.search = e.target.value; const l = $('#ticklist'); if (l) l.innerHTML = tickList(); } });
+document.addEventListener('input', e => {
+  if (e.target.id === 'search') { ui.search = e.target.value; const l = $('#ticklist'); if (l) l.innerHTML = tickList(); return; }
+  // a half-typed game survives the page being redrawn by an edit somewhere else on it
+  const gk = { g_name: 'name', g_date: 'date', g_notes: 'notes' }[e.target.id];
+  if (gk) ui.game[gk] = e.target.value;
+});
+/* Another copy of the app, in another tab, has saved. This one is out of date
+   now: its next save would undo that change, or — if the other copy has just
+   turned the PIN on — put the figures back on the device in the clear. */
+addEventListener('storage', e => { if (e.key === KEY) location.reload(); });
 document.addEventListener('toggle', e => { if (e.target.dataset && e.target.dataset.key) ui.open[e.target.dataset.key] = e.target.open; }, true);
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'g_name') { e.preventDefault(); $('#g_notes').focus(); return; }
@@ -295,7 +335,7 @@ async function billAmountChanged(i, next) {
   if (keep) {
     const lastMonth = b.ended || null;                 // a known final month carries over to the new price
     b.ended = C.mkey(C.addMonths(thisMonth + '-01', -1));
-    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth });
+    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth, skip: [...(b.skip || [])] });
     toast(`Old price kept until ${C.fmtM(b.ended)}`);
   } else {
     b.amount = next;
@@ -318,7 +358,10 @@ function importBackup(file) {
     try {
       const o = JSON.parse(rd.result);
       if (!o || typeof o !== 'object' || !o.pay || !o.money) throw new Error('not a backup');
-      S = o; normalize(); commit('restoring the backup'); toast('Backup restored', UNDO);
+      // shaped on its way in, and only then put in place: a file that will not take shape changes nothing
+      const was = S;
+      try { S = o; normalize(); } catch (err) { S = was; throw err; }
+      commit('restoring the backup'); toast('Backup restored', UNDO);
     } catch (e) { toast("That file isn't a backup from this app"); }
   };
   rd.onerror = () => toast("Couldn't read that file");
@@ -332,7 +375,7 @@ function importBackup(file) {
   buildTabs();
   storageOK = probeStorage();
   let raw = null;
-  if (storageOK) { try { raw = localStorage.getItem(KEY); } catch (e) { } }
+  try { raw = localStorage.getItem(KEY); } catch (e) { }     // readable even when it is too full to write
   const blob = encBlob(raw);
   if (blob) {
     if (!CRYPTO_OK) {                                  // encrypted, but this browser cannot decrypt
@@ -346,10 +389,18 @@ function importBackup(file) {
   } else {
     S = load();
   }
-  normalize();
+  try { normalize(); }
+  catch (err) {
+    /* What was stored will not take shape. Keep it — aside if it was in the
+       clear, untouched if it was sealed — and start from the defaults. */
+    console.error(err);
+    if (!cryptoKey) { try { localStorage.setItem(KEY + ':unreadable', JSON.stringify(S)); } catch (e) { saveFrozen = true; } }
+    else saveFrozen = true;
+    unreadable = true; S = clone(SEED); normalize();
+  }
   save();
   historyMark();                                       // undo starts from here
-  if (PAY_ONLY) { tab = 'pay'; $('#tabs').style.display = 'none'; document.body.classList.add('notabs'); }
+  if (PAY_ONLY) { tab = 'pay'; $('#tabs').closest('nav').style.display = 'none'; document.body.classList.add('notabs'); }
   lastDay = C.today();
   render(false);
   askPersist().then(v => { if (v !== null && tab === 'settings') render(); });

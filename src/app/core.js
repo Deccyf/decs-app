@@ -5,12 +5,14 @@ const THEME_KEY = KEY + ':theme';
 const PAY_ONLY = !!SEED.payOnly;
 const SUN = SEED.sundayLabel || 'Sunday premium';
 const clone = o => JSON.parse(JSON.stringify(o));
+const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const $ = s => document.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 let S, storageOK = true, tab = 'home', theme = 'auto';
 const ui = { payday: null, openYears: {}, showAllMonths: false, editBills: false, editDebts: false, editFixed: false,
-  editJobs: false, editGoals: false, moneyTab: 'now', showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {} };
+  editJobs: false, editGoals: false, moneyTab: 'now', showFlowOpts: false, flowPeriods: 4, set: 'Base Set', search: '', open: {},
+  game: { name: '', date: null, notes: '' } };
 
 const TABS = [
   { k: 'home', l: 'Home', d: 'M3 10.6 12 3.4l9 7.2M5.6 9.4V20a1 1 0 0 0 1 1h10.8a1 1 0 0 0 1-1V9.4' },
@@ -33,7 +35,8 @@ const svg = (d, w) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor
    Six digits is the floor for that reason. */
 const CRYPTO_OK = !!(window.crypto && window.crypto.subtle);
 const PBKDF2_ITERS = 310000;
-let cryptoKey = null, cryptoSalt = null;
+// the iterations the key in hand was derived with, which is what the blob must say it was sealed at
+let cryptoKey = null, cryptoSalt = null, cryptoIters = PBKDF2_ITERS;
 
 const b64 = buf => {                       // chunked: spreading a big array blows the stack
   const a = new Uint8Array(buf); let out = '';
@@ -50,7 +53,7 @@ async function deriveKey(pin, salt, iters) {
 async function sealText(text) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(text));
-  return JSON.stringify({ decsEnc: 1, iters: PBKDF2_ITERS, salt: b64(cryptoSalt), iv: b64(iv), ct: b64(ct) });
+  return JSON.stringify({ decsEnc: 1, iters: cryptoIters, salt: b64(cryptoSalt), iv: b64(iv), ct: b64(ct) });
 }
 async function openBlob(blob, pin) {
   const salt = unb64(blob.salt);
@@ -67,9 +70,20 @@ const pinIsSet = () => !!cryptoKey;
 
 /* ---------- storage ---------- */
 function probeStorage() { try { localStorage.setItem('__p', '1'); localStorage.removeItem('__p'); return true; } catch (e) { return false; } }
+/* Reading does not depend on writing: a phone out of space still has the
+   figures it saved, and showing an empty app over them looked like they had
+   gone. Anything stored that cannot be read is kept to one side rather than
+   saved over with the defaults on the way in. */
+let unreadable = false;
 function load() {
-  storageOK = probeStorage();
-  if (storageOK) { try { const raw = localStorage.getItem(KEY); if (raw && !encBlob(raw)) { const o = JSON.parse(raw); if (o && o.pay && o.money) return o; } } catch (e) { } }
+  let raw = null;
+  try { raw = localStorage.getItem(KEY); } catch (e) { }
+  if (raw && !encBlob(raw)) {
+    try { const o = JSON.parse(raw); if (o && o.pay && o.money) return o; } catch (e) { }
+    // if even that cannot be written, nothing is saved at all this session, so it cannot be lost
+    try { localStorage.setItem(KEY + ':unreadable', raw); } catch (e) { saveFrozen = true; }
+    unreadable = true;
+  }
   return clone(SEED);
 }
 /* Encryption is async, so writes are queued rather than fired off in parallel —
@@ -101,13 +115,46 @@ function logBalance(adj) {
   if (m.balanceLog.length > LOG_MAX) m.balanceLog = m.balanceLog.slice(-LOG_MAX);
 }
 
-let saveChain = Promise.resolve();
+/* A figure read off the bank: dated today and logged, taking with it whatever
+   the app moved since the last one (a card cleared with Pay now), so the
+   spending worked out between the two readings is not thrown by it. */
+function balanceTyped() {
+  const m = S.money;
+  m.balanceOn = C.today();
+  logBalance(C.num(m.balanceAdj));
+  m.balanceAdj = 0;
+  m.amexUndo = null;
+}
+/* A typed figure corrected rather than replaced — the sign flipped on an
+   overdrawn balance. It is still that day's reading, so the date stays and
+   that day's entry in the log follows it. */
+function balanceFixed() {
+  const m = S.money;
+  if (!m.balanceOn) { balanceTyped(); return; }
+  const e = m.balanceLog.find(x => x.on === m.balanceOn);
+  if (e) e.balance = C.r2(C.num(m.balance));
+  m.amexUndo = null;
+}
+
+/* A failed save is said once, and every later save still tries: space freed
+   up later means the next change is kept, rather than none for the rest of
+   the session. And with no key in hand, nothing is written over data that is
+   encrypted — that is another copy of the app having turned the PIN on, and
+   saving here would put the figures back on the device in the clear. */
+let saveChain = Promise.resolve(), plainOK = false, saveFrozen = false;
+const sealed = () => { try { return String(localStorage.getItem(KEY) || '').startsWith('{"decsEnc"'); } catch (e) { return false; } };
 function save(json) {
-  if (!storageOK) return saveChain;
+  if (saveFrozen) return saveChain;
   const snapshot = json || JSON.stringify(S);
   saveChain = saveChain.then(async () => {
-    try { localStorage.setItem(KEY, cryptoKey ? await sealText(snapshot) : snapshot); }
-    catch (e) { storageOK = false; toast('Could not save on this device'); }
+    try {
+      if (!cryptoKey && !plainOK && sealed()) { location.reload(); return; }
+      localStorage.setItem(KEY, cryptoKey ? await sealText(snapshot) : snapshot);
+      storageOK = true;
+    } catch (e) {
+      if (storageOK) toast('Could not save on this device — it may be out of space');
+      storageOK = false;
+    }
   });
   return saveChain;
 }
@@ -118,10 +165,12 @@ function normalize() {
   if (!S || typeof S !== 'object') S = clone(SEED);
   const arr = (o, k) => { if (!Array.isArray(o[k])) o[k] = []; };
   const obj = (o, k) => { if (!o[k] || typeof o[k] !== 'object' || Array.isArray(o[k])) o[k] = {}; };
-  ['house', 'classic', 'mega', 'psm', 'games'].forEach(k => arr(S, k));
+  ['house', 'classic', 'mega', 'psm', 'games'].forEach(k => { arr(S, k); S[k] = S[k].filter(isObj); });
   obj(S, 'money'); obj(S, 'pay');
   const m = S.money;
-  ['bills', 'months', 'debts'].forEach(k => arr(m, k));
+  ['bills', 'months', 'debts'].forEach(k => { arr(m, k); m[k] = m[k].filter(isObj); });
+  // a month is YYYY-MM; a whole date is cut to its month, and anything else is dropped rather than left to throw
+  const monthOf = v => C.isMonth(v) ? v : C.isDate(v) ? v.slice(0, 7) : null;
   /* Savings used to be several pots, each holding its own money. It is really
      one balance with a shopping list against it, so the old pots are added up
      into that balance and each becomes a thing being saved for. Runs once: an
@@ -155,6 +204,7 @@ function normalize() {
   if (typeof m.amexBefore !== 'boolean') m.amexBefore = false;
   if (typeof m.netLongTerm !== 'boolean') m.netLongTerm = false;
   if (m.amexUndo === undefined) m.amexUndo = null;
+  m.balanceAdj = C.r2(C.num(m.balanceAdj));
   if (!Array.isArray(m.balanceLog)) m.balanceLog = [];
   m.balanceLog = m.balanceLog.filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on)).slice(-LOG_MAX);
   if (S.backupOn === undefined) S.backupOn = null;
@@ -167,6 +217,8 @@ function normalize() {
   m.bills.forEach(b => {
     if (!b.id) b.id = uid();
     if (b.dueDay === undefined) b.dueDay = null;
+    b.started = monthOf(b.started); b.ended = monthOf(b.ended);
+    if (b.link !== 'Short-term' && b.link !== 'Long-term') b.link = null;
     const rv = Math.round(C.num(b.review));
     b.review = rv >= 1 && rv <= 12 ? rv : null;
     if (!/^\d{4}-\d{2}$/.test(b.reviewedOn || '')) b.reviewedOn = null;
@@ -175,14 +227,15 @@ function normalize() {
   });
   m.debts.forEach(d => {
     if (!d.id) d.id = uid();
+    if (d.type !== 'Long-term') d.type = 'Short-term';
     /* The same rule as the bank balance: a figure from before dates were kept is
        taken as true today, so the repayments start coming off it from now
        rather than never. Without this, a debt entered earlier would sit still. */
     if (!d.balanceOn && d.balance !== null && d.balance !== undefined && d.balance !== '') d.balanceOn = C.today();
-    if (d.balanceOn === undefined) d.balanceOn = null;
+    if (!C.isDate(d.balanceOn)) d.balanceOn = null;
     if (!/^\d{4}-\d{2}$/.test(d.rateEnds || '')) d.rateEnds = null;
   });
-  m.months = m.months.filter(x => x && typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month));
+  m.months = m.months.filter(x => C.isMonth(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
      Unsorted rows make "latest month" and the chart wrong; duplicates double
      count in the yearly totals. Merge and sort so neither can happen. */
@@ -196,9 +249,11 @@ function normalize() {
   });
   m.months = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
   const P = S.pay;
-  ['fixed', 'rises', 'taxYears'].forEach(k => arr(P, k));
+  ['fixed', 'rises', 'taxYears'].forEach(k => { arr(P, k); P[k] = P[k].filter(isObj); });
+  // a tax year with no real start date is never in force, and "Add next tax year" would build NaN-04-06 from it
+  P.taxYears = P.taxYears.filter(y => C.isDate(y.from));
   ['hours', 'hpaHistory', 'tax', 'actual'].forEach(k => obj(P, k));
-  if (!P.nextPayDay || !/^\d{4}-\d{2}-\d{2}$/.test(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
+  if (!C.isDate(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
   if (P.payslipLead === undefined || P.payslipLead === null || P.payslipLead === '') P.payslipLead = 4;
   if (!C.num(P.hoursWeek)) P.hoursWeek = 35;
@@ -206,7 +261,7 @@ function normalize() {
   if (!P.taxYears.length) {
     const t = P.tax || {}, seedTax = (SEED.pay && SEED.pay.tax) || {};
     P.taxYears = [{ from: t.taxYearStart || seedTax.taxYearStart || '2026-04-06',
-      personalAllowance: P.personalAllowance ?? 12570,
+      personalAllowance: P.personalAllowance ?? 12579,
       basicRate: t.basicRate ?? seedTax.basicRate, basicBand: t.basicBand ?? seedTax.basicBand,
       higherRate: t.higherRate ?? seedTax.higherRate, higherBand: t.higherBand ?? seedTax.higherBand,
       addRate: t.addRate ?? seedTax.addRate, niPT: t.niPT ?? seedTax.niPT, niUEL: t.niUEL ?? seedTax.niUEL,
@@ -216,6 +271,7 @@ function normalize() {
   if (Array.isArray(S.goals)) S.goals = S.goals.join('\n');
   if (typeof S.goals !== 'string') S.goals = '';
   ['house', 'games'].forEach(k => S[k].forEach(x => { if (!x.id) x.id = uid(); }));
+  S.games.forEach(g => { if (!C.isDate(g.date)) g.date = null; if (typeof g.game !== 'string') g.game = String(g.game ?? ''); });
   S.house.forEach(j => { if (!['To do', 'In progress', 'Done'].includes(j.status)) j.status = 'To do'; });
 }
 function setPath(o, p, v) {
@@ -228,12 +284,28 @@ function setPath(o, p, v) {
    under a focus move that then landed on a detached element. Deferring lets
    the move finish, and the redraw then finds and keeps the new field. */
 let renderQueued = false;
+/* A mouse press on a button straight after typing blurs the field, the change
+   commits, and a redraw between the press and the release replaced the button
+   under the pointer, so the click never happened. The redraw waits for the
+   release instead (touch never gets here: its blur comes after the tap). */
+let pointerHeld = false, renderWaiting = false;
+document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+const letGo = () => { pointerHeld = false; if (renderWaiting) { renderWaiting = false; setTimeout(render, 0); } };
+document.addEventListener('pointerup', letGo, true);
+document.addEventListener('pointercancel', letGo, true);
 function commit(label) {
   const json = historyPush(label);
   save(json);
+  // an Undo still showing from an earlier toast would now undo this instead
+  const t = $('#toast'); if (t && t.querySelector('button')) t.classList.remove('show');
   if (renderQueued) return;
   renderQueued = true;
-  setTimeout(() => { renderQueued = false; render(); }, 0);
+  setTimeout(() => {
+    renderQueued = false;
+    if (!pointerHeld) { render(); return; }
+    renderWaiting = true;
+    setTimeout(() => { if (renderWaiting) { renderWaiting = false; pointerHeld = false; render(); } }, 1500);
+  }, 0);
 }
 /* A toast can carry one action — "Removed Rent · Undo" — which stays up long
    enough to reach for. */
@@ -271,7 +343,8 @@ function historyStep(from, to) {
   const e = from.pop();
   if (!e) return null;
   to.push({ json: JSON.stringify(S), label: e.label, tab: e.tab, sec: e.sec });
-  S = JSON.parse(e.json); normalize();
+  const backupOn = S.backupOn;                       // downloading a backup happened, whatever is undone
+  S = JSON.parse(e.json); S.backupOn = backupOn; normalize();
   historyMark();
   save(hist.mark);
   tab = e.tab; if (e.sec) ui.moneyTab = e.sec;      // show the thing that just came back
@@ -303,18 +376,25 @@ function dialog(opts) { return (dlgQueue = dlgQueue.then(() => showDialog(opts),
 function showDialog({ title, body = '', ok = 'OK', cancel = 'Cancel', danger = false, input = null, inputType = 'text' }) {
   return new Promise(resolve => {
     const d = $('#dlg'), f = $('#dlgForm');
-    f.innerHTML = `<h3>${esc(title)}</h3>${body ? `<p>${body}</p>` : ''}
-      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off"${
+    /* Cancel is a plain button, so Enter on the keypad submits with OK — as
+       the first submit button in the form it used to be the default, and Enter
+       quietly threw the figure away. */
+    f.innerHTML = `<h3 id="dlgTitle">${esc(title)}</h3>${body ? `<p>${body}</p>` : ''}
+      ${input !== null ? `<div class="field"><input type="${esc(inputType)}" id="dlgIn" value="${esc(input)}" autocomplete="off" enterkeyhint="done" aria-labelledby="dlgTitle"${
         inputType === 'password' ? ' inputmode="numeric" class="pinin"'
         : inputType === 'number' ? ' inputmode="decimal" step="any" class="amtin"' : ''}></div>` : ''}
-      <div class="btnrow"><button class="btn ghost" value="cancel" type="submit">${esc(cancel)}</button>
+      <div class="btnrow"><button class="btn ghost" value="cancel" type="button">${esc(cancel)}</button>
       <button class="btn${danger ? ' danger' : ''}" value="ok" type="submit">${esc(ok)}</button></div>`;
+    f.querySelector('button[value="cancel"]').onclick = () => d.close('cancel');
+    // held here rather than on the form, so a PIN never sits in the page as an attribute
+    let val = '';
     const done = () => {
       d.removeEventListener('close', done);
       const v = d.returnValue === 'ok';
-      resolve(input !== null ? (v ? (f.dataset.val || '') : null) : v);
+      const el = $('#dlgIn'); if (el) el.value = '';
+      resolve(input !== null ? (v ? val : null) : v);
     };
-    f.onsubmit = () => { const el = $('#dlgIn'); if (el) f.dataset.val = el.value.trim(); };
+    f.onsubmit = () => { const el = $('#dlgIn'); if (el) val = el.value.trim(); };
     d.addEventListener('close', done);
     d.returnValue = 'cancel';
     d.showModal();
@@ -342,7 +422,13 @@ function unlockScreen(blob) {
         const opened = await openBlob(blob, pin);
         const data = JSON.parse(opened.text);
         if (!data || !data.pay || !data.money) throw new Error('not the app\u2019s data');
-        cryptoKey = opened.key; cryptoSalt = opened.salt;
+        cryptoKey = opened.key; cryptoSalt = opened.salt; cryptoIters = blob.iters || PBKDF2_ITERS;
+        /* Sealed at an older strength: the PIN is in hand for this moment only,
+           so re-derive at today's and the save on the way in reseals it. */
+        if (cryptoIters !== PBKDF2_ITERS) {
+          const salt = crypto.getRandomValues(new Uint8Array(16)), key = await deriveKey(pin, salt, PBKDF2_ITERS);
+          cryptoKey = key; cryptoSalt = salt; cryptoIters = PBKDF2_ITERS;
+        }
         S = data;
         wrap.hidden = true; document.body.classList.remove('locked');
         form.onsubmit = null;
@@ -372,15 +458,13 @@ async function setPin() {
   });
   if (!ready) return;
   exportBackup();
-  const one = await askPin('Choose a PIN', 'Six digits or more. Longer is harder to guess — a word or phrase works too.', 'Next');
+  const one = await askPin('Choose a PIN', 'Six digits or more. Longer is harder to guess.', 'Next');
   if (one === null) return;
   if (one.length < 6) { toast('Use at least 6 characters'); return; }
   const two = await askPin('Type it again', 'Just to be sure you have it right.', 'Turn on PIN lock');
   if (two === null) return;
   if (one !== two) { toast("Those didn't match — nothing changed"); return; }
-  cryptoSalt = crypto.getRandomValues(new Uint8Array(16));
-  cryptoKey = await deriveKey(one, cryptoSalt);
-  await save();
+  await rekey(one);
   render();
   toast('PIN lock on');
 }
@@ -391,10 +475,16 @@ async function changePin() {
   const two = await askPin('Type it again', '', 'Change PIN');
   if (two === null) return;
   if (one !== two) { toast("Those didn't match — nothing changed"); return; }
-  cryptoSalt = crypto.getRandomValues(new Uint8Array(16));
-  cryptoKey = await deriveKey(one, cryptoSalt);
-  await save();
+  await rekey(one);
   toast('PIN changed');
+}
+/* Derived first and swapped in together: a save landing while the key was
+   being worked out used to seal with the new salt and the old key, which
+   opens with neither PIN. */
+async function rekey(pin) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), key = await deriveKey(pin, salt, PBKDF2_ITERS);
+  cryptoKey = key; cryptoSalt = salt; cryptoIters = PBKDF2_ITERS;
+  await save();
 }
 async function clearPin() {
   const yes = await dialog({ title: 'Turn off the PIN lock?',
@@ -402,14 +492,29 @@ async function clearPin() {
     ok: 'Turn it off', danger: true });
   if (!yes) return;
   cryptoKey = null; cryptoSalt = null;
+  plainOK = true;                                    // this one save is allowed to go back to plain
   await save();
+  plainOK = false;
   render();
   toast('PIN lock off');
 }
 
 /* ---------- small html helpers ---------- */
-const tile = (cls, cap, val, sub, sm) => `<div class="tile ${cls}"><div class="cap">${esc(cap)}</div><div><div class="val${sm ? ' sm' : ''}">${val}</div><div class="tsub">${sub || ''}</div></div></div>`;
-const field = (label, inner) => `<div class="field"><label>${esc(label)}</label>${inner}</div>`;
+const tile = (cls, cap, val, sub) => `<div class="tile ${cls}"><div class="cap">${esc(cap)}</div><div><div class="val">${val}</div><div class="tsub">${sub || ''}</div></div></div>`;
+/* The label is tied to the first control in the field — its own id if it has
+   one, a fresh one if not — so tapping the words focuses the box, and a screen
+   reader names the box by them rather than by its placeholder. */
+let fieldSeq = 0;
+const field = (label, inner) => {
+  let id = null;
+  const tied = inner.replace(/<(input|select|textarea)\b[^>]*>/, tag => {
+    const own = tag.match(/\bid="([^"]+)"/);
+    if (own) { id = own[1]; return tag; }
+    id = 'f' + (++fieldSeq);
+    return tag.replace(/^<(\w+)/, `<$1 id="${id}"`);
+  });
+  return `<div class="field"><label${id ? ` for="${id}"` : ''}>${esc(label)}</label>${tied}</div>`;
+};
 const inp = (path, val, type = 'number', extra = '') => {
   const v = val === null || val === undefined ? '' : val;
   const attrs = type === 'number' ? 'type="number" inputmode="decimal" step="any"' : `type="${type}"`;
@@ -433,13 +538,22 @@ const segment = (act, val, opts) => `<div class="seg" role="group">${opts.map(o 
 const toggle = (path, on, label, note) => `<label class="switch"><span class="sl"><b>${esc(label)}</b>${note ? `<small>${esc(note)}</small>` : ''}</span>
   <input type="checkbox" data-set="${esc(path)}"${on ? ' checked' : ''}><span class="track"></span></label>`;
 const flowOpt = () => ({ shift: S.money.dueShift, bankHols: !!S.money.bankHols });
+/* The pay schedule is the heaviest sum in the app, and Home, Pay and Money all
+   want it on every redraw — ticking a card, opening a year — though it can only
+   change when the pay settings or the date do. */
+let payMemo = { key: '', val: null };
+function payCalcNow() {
+  const key = C.today() + JSON.stringify(S.pay);
+  if (key !== payMemo.key) payMemo = { key, val: C.payCalc(S.pay) };
+  return payMemo.val;
+}
 /* Twelve taps for the months a bill is not paid. Council tax over ten
    instalments, a gym frozen for the winter — the pattern varies, so all twelve
    are offered rather than a "number of instalments" box. */
 const selPairs = (path, val, opts) => `<select data-set="${esc(path)}">${opts.map(o =>
   `<option value="${esc(o.v)}"${String(o.v) === String(val ?? '') ? ' selected' : ''}>${esc(o.l)}</option>`).join('')}</select>`;
-const monthPicker = (i, skip) => `<div class="months" role="group" aria-label="Months this bill is not paid">${
-  C.MON.map((name, k) => { const mo = k + 1, off = skip.includes(mo);
+const monthPicker = (i, skip) => `<div class="months" role="group" aria-label="Months this bill is paid">${
+  C.MON.map((name, k) => { const mo = k + 1, off = (skip || []).includes(mo);
     return `<button type="button" data-act="billSkip" data-i="${i}" data-m="${mo}" class="${off ? 'off' : ''}" aria-pressed="${off ? 'false' : 'true'}">${name}</button>`;
   }).join('')}</div>`;
 

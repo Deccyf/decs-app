@@ -18,13 +18,17 @@ function drawChart() {
   x.scale(dpr, dpr);
   const ink = cssVar('--muted', '#667085'), line = cssVar('--line', '#E4E9F0');
   const c1 = cssVar('--brand', '#1F3A5F'), c2 = cssVar('--teal', '#2A9D8F');
-  const max = Math.max(...data.map(d => C.num(d.earnings)), 1), gw = (W - padL - 6) / data.length;
+  /* The scale goes up in round steps — £1k, £2k, £3k — rather than quarters
+     of the biggest month, which printed "£2k" twice once they were rounded. */
+  const steps = 4, top = Math.max(...data.map(d => C.num(d.earnings)), 1) / steps;
+  const mag = Math.pow(10, Math.floor(Math.log10(top)));
+  const step = [1, 2, 2.5, 5, 10].map(f => f * mag).find(s => s >= top);
+  const max = step * steps, gw = (W - padL - 6) / data.length;
   x.font = '10px ' + getComputedStyle(document.body).fontFamily; x.fillStyle = ink; x.strokeStyle = line;
-  const steps = 4;
   for (let i = 0; i <= steps; i++) {
-    const v = max / steps * i, y = padT + (H - padT - padB) * (1 - v / max);
+    const v = step * i, y = padT + (H - padT - padB) * (1 - v / max);
     x.beginPath(); x.moveTo(padL, y); x.lineTo(W, y); x.stroke();
-    x.textAlign = 'right'; x.fillText('£' + Math.round(v / 1000) + 'k', padL - 6, y + 3);
+    x.textAlign = 'right'; x.fillText('£' + (v >= 1000 ? +(v / 1000).toFixed(1) + 'k' : v), padL - 6, y + 3);
   }
   data.forEach((d, i) => {
     const x0 = padL + i * gw + gw * 0.15, bw = gw * 0.32;

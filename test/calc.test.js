@@ -975,3 +975,211 @@ test('the expected clear date lands in the month the last payment really leaves'
   assert.equal(r.debts[0].payoff.months, 2);
   assert.equal(r.debts[0].payoff.date.slice(0, 7), '2026-10', '28 Sep and 28 Oct, so October, not November');
 });
+
+/* ---------------------------------------------------- pay: review fixes -- */
+test('an old year of holiday pay kept for the record is not paid again', () => {
+  const p = C.payCalc(pay({ hpaHistory: { 2024: 1200, 2025: 1500 } }), '2026-09-26');
+  assert.deepEqual(p.rows.filter(r => r.hpaPay).map(r => [r.payday, r.hpaPay]), [['2026-03-13', 1500]],
+    '2024 was paid in March 2025, before the schedule starts');
+});
+
+test('recording last year\'s holiday pay in March keeps the whole tax year', () => {
+  const h = { '2026-10-23': { ot: 20 } };
+  const before = C.payCalc(pay({ hours: h }), '2027-03-13'), after = C.payCalc(pay({ hours: h, hpaHistory: { 2026: 50 } }), '2027-03-13');
+  assert.equal(after.rows.filter(r => r.taxYear === '2026-04-06').length, 13, 'all thirteen pay days of 2026/27');
+  assert.equal(after.totals.ot, 20, 'the October overtime is still in the year');
+  // only the holiday pay itself moves, from the estimate to the £50 typed
+  assert.ok(Math.abs(after.totals.net - before.totals.net) < 15, `${before.totals.net} → ${after.totals.net}`);
+});
+
+test('two backdated rises each pay only their own step', () => {
+  const p = C.payCalc(pay({ salary: 40000, rises: [
+    { from: '2026-04-01', salary: 42000, arrearsOn: '2026-10-23' },
+    { from: '2026-07-01', salary: 44000, arrearsOn: '2026-10-23' }] }), '2026-09-26');
+  assert.deepEqual(p.rises.map(r => r.total), [942.07, 443.62]);
+  assert.equal(p.rows.find(r => r.payday === '2026-10-23').backpay, 1385.69, 'not £1,829.34');
+});
+
+test('the rises list finds each rise however they were typed in', () => {
+  const R = [{ from: '2026-07-01', salary: 44000, arrearsOn: '2026-10-23' }, { from: '2025-04-01', salary: 42000, arrearsOn: '2025-07-04' }];
+  const p = C.payCalc(pay({ salary: 40000, rises: R }), '2026-09-26');
+  assert.deepEqual(R.map((x, i) => p.rises.find(c => c.idx === i).from), ['2026-07-01', '2025-04-01']);
+});
+
+test('the hourly rate and basic are the ones being paid now, rises included', () => {
+  const p = C.payCalc(pay({ salary: 40000, rises: [{ from: '2026-04-01', salary: 52000 }] }), '2026-09-26');
+  assert.equal(p.hourly, 28.48);
+  assert.equal(p.basic, 3987.22);
+  assert.equal(p.basic, p.rows[p.nextIdx].basic);
+});
+
+test('a cleared pay setting falls back instead of breaking the figures', () => {
+  const noDay = C.payCalc(pay({ nextPayDay: null }), '2026-09-26');
+  assert.ok(noDay.rows.length > 0 && noDay.nextPayDay > '2026-09-26', 'no pay day still gives a schedule');
+  assert.equal(C.payCalc(pay({ nextPayDay: '2026-13-01' }), '2026-09-26').rows.length > 0, true, 'nor does a nonsense one throw');
+  const noHours = C.payCalc(pay({ hoursWeek: null }), '2026-09-26');
+  assert.ok(isFinite(noHours.hourly) && isFinite(noHours.rows[noHours.nextIdx].net), 'no hours is not Infinity');
+  const noEnd = C.payCalc(pay({ periodEndDays: '' }), '2026-09-26'), six = C.payCalc(pay(), '2026-09-26');
+  assert.equal(noEnd.rows[noEnd.nextIdx].end, six.rows[six.nextIdx].end, 'a blank period end is the default six days');
+  assert.doesNotThrow(() => C.payCalc(pay({ rises: [null], fixed: [null], taxYears: [null] }), '2026-09-26'));
+});
+
+test('a fourteenth pay day in one tax year is taxed on its own four weeks', () => {
+  const f = x => C.payCalc(pay(x), '2026-09-26').rows.find(r => r.payday === '2030-04-05');
+  assert.equal(f().taxYear, '2029-04-06', '6 Apr 2029 to 5 Apr 2030 holds fourteen');
+  assert.equal(f().paye, f({ nonCumulative: true }).paye, 'week 56 is week 1 basis');
+  assert.equal(f().paye, 438.4);
+});
+
+test('an item with an amount counts whether or not it has a name yet', () => {
+  assert.equal(C.payCalc(pay({ fixed: [{ name: '', amount: 50, treatment: 'Sacrifice' }] }), '2026-09-26').rows[0].sacr, 50);
+});
+
+test('an item dated to part of a period is charged by the day', () => {
+  const p = C.payCalc(pay({ fixed: [{ name: 'Pension', amount: 280, treatment: 'Sacrifice', from: '2026-10-01' }] }), '2026-09-26');
+  const r = p.rows.find(x => x.start < '2026-10-01' && x.end >= '2026-10-01');
+  const days = C.daysBetween('2026-10-01', r.end) + 1;
+  assert.equal(r.sacr, C.r2(280 * days / 28), `${days} of the 28 days`);
+});
+
+test('hours add up without floating-point crumbs', () => {
+  const p = C.payCalc(pay({ hours: { '2026-10-23': { ot: 2.2 }, '2026-11-20': { ot: 4.4 } } }), '2026-09-26');
+  assert.equal(p.totals.ot, 6.6);
+});
+
+test('the personal allowance defaults to the tax code\'s number × 10 + 9', () => {
+  const p = C.payCalc(pay({ taxYears: [{ from: '2026-04-06', basicRate: 0.2 }] }), '2026-09-26');
+  assert.equal(p.years[0].personalAllowance, 12579, '1257L');
+});
+
+/* -------------------------------------------------- money: review fixes -- */
+const payOn = (payday, net = 2500) => ({ nextPayDay: payday, nextIdx: 0, rows: [{ payday, net }, { payday: C.addDays(payday, 28), net }] });
+
+test('a bill dated pay day comes out of the pay, not before it', () => {
+  const m = { buffer: 0, balance: 100, balanceOn: '2026-09-21', debts: [],
+    bills: [{ name: 'Rent', amount: 780, dueDay: 25, started: '2024-01' }] };
+  const r = C.runway(m, payOn('2026-09-25'), OPT, '2026-09-21');
+  assert.equal(r.shortfall, false, 'pay lands in the same early batch the rent leaves in');
+  assert.equal(r.safe, 100);
+  assert.deepEqual(r.events, [], 'nothing leaves before pay day');
+  assert.deepEqual(r.onPay.map(e => e.name), ['Rent']);
+  assert.equal(r.afterPay, 1820, '100 + 2,500 - 780');
+  assert.deepEqual(C.periodFlows(m, payOn('2026-09-25'), OPT, 1)[0].events.map(e => e.name), ['Rent'],
+    'and the period starting that day counts it, once');
+});
+
+test('the clear date is the day the last payment really leaves', () => {
+  const card = extra => ({ bills: [Object.assign({ name: 'Card', dueDay: 5, started: '2020-01', link: 'Short-term' }, extra)], debts: [] });
+  const debt = (balance, balanceOn) => ({ type: 'Short-term', balance, repayment: 200, apr: 0, balanceOn });
+  const clear = (m, d, tod, opt) => C.moneyCalc(Object.assign(m, { debts: [d] }), tod, opt || EXACT).debts[0].payoff.date;
+  // the 31st moved off a Saturday into November, and the one after lands on the 30th
+  assert.equal(C.moneyCalc({ bills: [{ name: 'Card', dueDay: 31, started: '2020-01', link: 'Short-term' }],
+    debts: [{ type: 'Short-term', balance: 100, repayment: 50, apr: 0, balanceOn: '2026-10-20' }] }, '2026-10-20', OPT).debts[0].payoff.date, '2026-11-30');
+  assert.equal(clear({ bills: [], debts: [] }, debt(400, '2026-08-28'), '2026-09-26'), '2026-10-28', 'monthly from the statement with no bill');
+  assert.equal(clear(card({ skip: [12] }), debt(1000, '2026-09-26'), '2026-09-26'), '2027-03-05', 'December off pushes it into March');
+  assert.equal(clear(card(), debt(400, '2026-10-10'), '2026-09-26'), '2026-12-05', 'nothing leaves before a statement dated ahead');
+});
+
+test('a debt with no type is short-term everywhere at once', () => {
+  const m = { bills: [{ name: 'Cards', dueDay: 5, started: '2020-01', link: 'Short-term' }],
+    debts: [{ name: 'Old loan', balance: 1000, repayment: 100, apr: 0, balanceOn: '2026-06-01' }] };
+  const r = C.moneyCalc(m, '2026-09-26', EXACT);
+  assert.equal(r.debts[0].balance, 600, 'paid down on the card bill\'s dates');
+  assert.equal(r.bills[0].amt, 100, 'and the bill that pays it charges for it');
+  assert.equal(C.billEvents(m, '2026-10-01', '2026-10-31', EXACT).length, 1, 'so the cash flow does too');
+});
+
+test('bill months that are not months cannot stop the sums', () => {
+  assert.equal(C.moneyCalc({ bills: [{ name: 'Phone', amount: 30, dueDay: 5, ended: '2027-3' }] }, '2026-09-26').activeTotal, 30);
+  assert.equal(C.billDates({ dueDay: 5, started: '2026-13', ended: 'soon' }, '2026-10-01', '2026-10-31', EXACT).length, 1);
+});
+
+test('a long bill counts every payment, not the first eighty months', () => {
+  assert.equal(C.moneyCalc({ bills: [{ name: 'Mortgage', amount: 958.41, dueDay: 1, started: '2020-01', ended: '2050-12' }] },
+    '2026-09-26', EXACT).bills[0].left, 291);
+  const d = { type: 'Long-term', balance: 150000, repayment: 900, apr: 0.03, balanceOn: '2019-01-15' };
+  const withBill = C.debtNow(d, { bills: [{ name: 'M', dueDay: 15, started: '2010-01', link: 'Long-term' }] }, '2026-09-26', EXACT);
+  const monthly = C.debtNow(d, { bills: [] }, '2026-09-26', EXACT);
+  assert.equal(withBill.payments, monthly.payments, 'the funding bill\'s dates run as long as the monthly ones');
+});
+
+test('a last payment moved into the next month is still counted, then it finishes', () => {
+  const m = { bills: [{ name: 'X', amount: 30, dueDay: 31, started: '2025-01', ended: '2026-10' }] };
+  assert.equal(C.moneyCalc(m, '2026-10-20', OPT).bills[0].left, 1, 'Sat 31 Oct goes on Mon 2 Nov');
+  assert.equal(C.moneyCalc(m, '2026-11-01', OPT).bills[0].finished, false, 'so it is live until then');
+  assert.equal(C.moneyCalc(m, '2026-11-03', OPT).bills[0].finished, true);
+});
+
+test('an undated bill with an end has no payments to count, only an end', () => {
+  const b = C.moneyCalc({ bills: [{ name: 'X', amount: 30, started: '2025-01', ended: '2027-03' }] }, '2026-09-26').bills[0];
+  assert.equal(b.left, null);
+  assert.equal(b.finished, false);
+});
+
+test('a bill that has not started yet is not in the total yet', () => {
+  const r = C.moneyCalc({ bills: [{ name: 'Car finance', amount: 300, dueDay: 5, started: '2027-01' }] }, '2026-09-26');
+  assert.equal(r.activeTotal, 0);
+  assert.equal(r.bills[0].notYet, true);
+  assert.equal(C.moneyCalc({ bills: [{ name: 'Car finance', amount: 300, dueDay: 5, started: '2027-01' }] }, '2027-01-02').activeTotal, 300);
+});
+
+test('a linked bill ends when the debts still owing clear', () => {
+  const m = { bills: [{ name: 'C', dueDay: 5, started: '2020-01', link: 'Short-term' }], debts: [
+    { type: 'Short-term', balance: 100, repayment: 100, apr: 0, balanceOn: '2026-06-01' },
+    { type: 'Short-term', balance: 600, repayment: 200, apr: 0, balanceOn: '2026-09-26' }] };
+  assert.equal(C.moneyCalc(m, '2026-09-26', EXACT).bills[0].clears, '2026-12-05', 'the one already cleared has no say');
+});
+
+test('what came out of the pot is what the got list adds up, even nothing', () => {
+  assert.equal(C.savingsCalc({ balance: 0, goals: [{ name: 'Bike', cost: 500, got: '2026-09-01', paid: 0 }] }, [], '2026-09-26').spent, 0);
+  assert.equal(C.savingsCalc({ balance: 0, goals: [{ name: 'Bike', cost: 500, got: '2026-09-01', paid: null }] }, [], '2026-09-26').spent, 500,
+    'with no figure recorded the price stands in');
+});
+
+test('something with no price yet is never the next thing to save for', () => {
+  const s = C.savingsCalc({ balance: 2450, goals: [{ name: 'Thing', cost: null }, { name: 'Watch', cost: 5600 }] }, [], '2026-09-26');
+  assert.equal(s.next.name, 'Watch');
+  assert.deepEqual(s.goals.map(g => g.name), ['Watch', 'Thing'], 'priced things first');
+});
+
+test('the saving rate compares savings with the earnings of the same months', () => {
+  const r = C.moneyCalc({ bills: [], months: [{ month: '2026-07', earnings: 2000, saved: 200 },
+    { month: '2026-08', earnings: 2000, saved: 200 }, { month: '2026-09', earnings: null, saved: 600 }] }, '2026-09-26');
+  assert.equal(r.yearRow.rate, 0.1, 'not £1,000 over £4,000');
+  assert.equal(r.yearRow.saved, 1000, 'though every pound saved is still counted');
+});
+
+test('a December price check is still asked about in January, then lets go', () => {
+  const b = { name: 'Gym', amount: 30, dueDay: 1, started: '2024-01', review: 12 };
+  const asks = tod => C.moneyCalc({ bills: [b] }, tod).reviews.length;
+  assert.deepEqual(['2026-12-31', '2027-01-01', '2027-05-31', '2027-06-01'].map(asks), [1, 1, 1, 0]);
+  assert.equal(C.moneyCalc({ bills: [{ ...b, started: '2027-01' }] }, '2027-01-10').reviews.length, 0,
+    'a bill added after the change has the new price already');
+});
+
+test('a bill that has finished altogether drops out of price changes', () => {
+  const gym = [{ name: 'Gym', amount: 30, started: '2024-01', ended: '2025-01' }, { name: 'Gym', amount: 45, started: '2025-02', ended: '2025-06' }];
+  assert.equal(C.priceHistory(gym, '2026-09-26').length, 0);
+  assert.equal(C.priceHistory(gym, '2025-05-10').length, 1, 'while it was running it counted');
+});
+
+test('the last card payment is the same penny in the cash flow and on the debt', () => {
+  const m = { bills: [{ name: 'C', dueDay: 5, started: '2020-01', link: 'Short-term' }],
+    debts: [{ type: 'Short-term', balance: 140, repayment: 200, apr: 0.219, balanceOn: '2026-09-01' }] };
+  assert.equal(C.billEvents(m, '2026-09-02', '2026-10-31', EXACT)[0].amount, C.debtNow(m.debts[0], m, '2026-10-31', EXACT).paid);
+});
+
+test('nothing owed or nothing paid has no payoff', () => {
+  assert.equal(C.debtPayoff({ balance: 1000, repayment: -200, apr: 0.2 }, '2026-09-26'), null);
+  assert.equal(C.debtPayoff({ balance: -50, repayment: 200, apr: 0.2 }, '2026-09-26'), null);
+});
+
+test('the spending log is the same worked in one pass', () => {
+  const m = { buffer: 0, debts: [], bills: [{ name: 'Rent', amount: 780, dueDay: 1, started: '2024-01' },
+    { name: 'Gym', amount: 30, dueDay: 15, started: '2024-01' }],
+    balanceLog: Array.from({ length: 40 }, (_, i) => ({ on: C.addDays('2026-01-05', i * 6), balance: 2000 - (i % 7) * 150, adj: i % 5 ? 0 : -50 })) };
+  const p = C.payCalc(pay(), '2026-09-26');
+  const sp = C.spendLog(m, p, OPT, '2026-09-26');
+  // every window agrees with the bills worked out for that window alone
+  sp.windows.forEach(w => assert.equal(w.bills, C.r2(C.billEvents(m, C.addDays(w.from, 1), w.to, OPT).reduce((a, e) => a + e.amount, 0)), w.from));
+});

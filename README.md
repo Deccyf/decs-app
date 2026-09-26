@@ -48,9 +48,21 @@ week, NI per period from thresholds derived the way HMRC derives them (weekly,
 rounded up, multiplied), overtime and Sunday premium, salary sacrifice and
 allowances, pay rises with backpay, and Southeastern's EU holiday pay. Rates
 live in `pay.taxYears`, one entry per year, so April is a data change rather
-than a code change. The personal allowance is whatever the tax code says — the
-app does not work the £100k taper out, because payroll does not either, so it
-says when the code on file has clearly not been updated.
+than a code change. The personal allowance is whatever the tax code says, as
+the code's number × 10 + 9 — 12,579 for 1257L, which is what HMRC's own tables
+use — and the app does not work the £100k taper out, because payroll does not
+either, so it says when the code on file has clearly not been updated.
+
+The schedule always holds the whole of the current tax year, since its totals
+are on screen, plus last calendar year while its holiday pay is still an
+estimate, plus four years ahead. Cumulative tax needs every pay day since 6
+April, so when the schedule starts mid-year the earlier ones are worked out and
+left out of what is returned. A fourteenth pay day in one tax year (HMRC's
+"week 56", which a 28-day cycle hits every few years) is taxed on its own four
+weeks. Holiday pay lands on a March pay day or not at all, so a year kept for
+the record is never paid twice. Two backdated rises are each measured against
+the one before, not both against the old salary. Blank settings fall back to a
+fresh install's defaults rather than turning every figure into NaN.
 
 A payslip beats a projection. `pay.actual` holds a real net against a pay day,
 and once one is typed it is what every downstream figure spends — the cash flow,
@@ -72,13 +84,25 @@ Bills landing on a weekend or bank holiday can shift to the next or previous
 working day (`shiftDue`, with Easter worked out rather than tabulated). An
 overdraft counts as spendable room; a buffer does not.
 
+A bill dated pay day itself comes out of the pay rather than before it (`onPay`):
+it leaves in the same early-morning batch the pay lands in, so rent on pay day
+is not a shortfall, and the period that starts that day is the one that counts
+it. Money the app moves itself — the card cleared with **Pay now** — is kept as
+`balanceAdj` on top of the typed figure rather than rewriting it: the reading
+keeps its date, the bills carried since still come off, and the next balance
+typed takes the adjustment into the log with it.
+
 **Bills.** A bill can have months off (`skip`, month numbers) for council tax
 over ten instalments or a gym frozen for winter, and a month it changes price
 each year (`review`), which nudges once a year until a new figure is typed or
 the old one confirmed. `ended` is the last month paid, and it can be behind you
 or ahead: a phone contract with its final month known stays live and counted,
 showing the payments left, then drops out of the totals and the cash flow on its
-own. Changing an amount offers to keep the old price as a separate dated row,
+own — once the last real payment has gone, which can be a few days into the
+next month when a weekend moves it. A bill whose `started` month is still ahead
+is not counted until it comes. The price check runs from the review month for
+six months, across a year end too, and choosing the month counts as knowing
+today's price. Changing an amount offers to keep the old price as a separate dated row,
 which is what makes the price history real, and a known final month carries over
 to the new price. A bill can link to a debt type instead of carrying its own
 amount (`billAmount` / `debtDue`): it then pays each debt of that type only while
@@ -92,8 +116,15 @@ the day the typed figure was true and the typed figure is never rewritten, so
 retyping from the next statement restarts the projection. A debt with a balance
 but no date is taken as true today on load, the same rule as the bank balance,
 so nothing entered before dates were kept sits still for ever. The expected
-clear date counts the payments with `debtPayoff` and anchors them on the day the
-funding bill really pays, so it lands in the right month. A blank APR is treated
+clear date counts the payments with `debtPayoff` and takes the last of them off
+the real schedule (`payDates`): the funding bill's dates, moved off weekends and
+missing its months off, or monthly from the statement where no bill pays it.
+Changing the rate or the repayment carries the balance to today on the old terms
+first, so the new ones only apply from now — except a blank APR, which was never
+a rate, so filling it in reworks the carry honestly from the statement. One
+thing still to know: retyping a balance moves the anchor, so a card that
+cleared before its new statement is taken as having paid on the dates in
+between. A dated history of terms would fix that; it is on the list. A blank APR is treated
 as unknown and flagged, because taking the whole repayment off with no interest
 flatters a real debt badly; type 0 for a genuine 0% deal. `rateEnds` records
 when a fixed rate runs out and says so once it has.
@@ -113,7 +144,9 @@ average, because the pay in them is this app's estimate rather than a payslip.
 ## What it nudges about
 
 Home carries a "Needs a look" card, and it only exists when there is something
-in it. Every row is one tap to the place that deals with it. They are the main
+in it. Every row is one tap to the place that deals with it. The red ones come
+first and only three show until asked for the rest, so a long list never pushes
+the figures off the screen. They are the main
 way the app says anything, so they are worth knowing as a set before adding
 another:
 
@@ -125,7 +158,7 @@ another:
 - **Debts.** A fixed rate that has run out, so the figures still assume the old
   one; a debt being carried with no APR, which flatters it badly.
 - **Pay.** The payslip figure, from a few days before pay day until a few days
-  after, then it lets go.
+  after, then it lets go — once there is a salary to have a payslip for.
 - **The data itself.** No backup yet, or the last one over a month old.
 
 Each clears by dealing with it, or by saying once that nothing has changed — a
@@ -153,9 +186,22 @@ download so Home can nudge when it goes stale.
 
 **Rendering is a full redraw.** Every change rebuilds the view from state, with
 focus remembered by what the field edits and put back afterwards, and an error
-boundary so a half-finished backup cannot white-screen the app. `normalize()`
-fills in anything a restored file is missing and is where old data shapes are
-migrated.
+boundary so a half-finished backup cannot white-screen the app. A redraw waits
+for a pressed mouse button to come up, so the click that blurred a field still
+lands. `normalize()` fills in anything a restored file is missing, drops list
+entries that are not objects and months or dates that are not real, and is
+where old data shapes are migrated. A restore is shaped on a copy and only put
+in place once that works, so a bad file changes nothing. `payCalcNow()` keeps
+the pay schedule between redraws until the pay settings or the date change.
+
+**Storage is read even when it cannot be written**, so a phone out of space
+still shows its figures; a failed save is said once and every later save still
+tries. Anything stored that cannot be read is kept aside under
+`decs-stuff-v1:unreadable` rather than saved over. Another copy of the app open
+in another tab reloads this one when it saves, and with no key in hand nothing
+is written over data that copy has encrypted. A PIN blob records the iterations
+it was really sealed at, and one from an older strength is resealed at today's
+the moment it is opened.
 
 ## Tests
 
