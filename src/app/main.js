@@ -262,6 +262,20 @@ document.addEventListener('change', e => {
   if (el.id === 'importFile') { if (el.files[0]) importBackup(el.files[0]); el.value = ''; return; }
   if (el.dataset.hours) { const hv = C.num(el.value); if (!isFinite(hv)) { toast("That isn't a number — left as it was"); render(); return; }
     const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.r2(hv)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit('the hours'); return; }
+  /* A pay rise typed as a percentage: worked into the new salary and London
+     weighting from the figures in force before it, which is what is stored. */
+  if (el.dataset.risePct !== undefined) {
+    const i = +el.dataset.risePct, r = S.pay.rises[i], v = parseInput(el);
+    if (!r) return;
+    if (v === undefined) { toast("That isn't a number — left as it was"); render(); return; }
+    if (v === null) { render(); return; }                // clearing it leaves the figures it made
+    const before = C.payBefore(S.pay, r.from, i);
+    if (!(before.salary > 0)) { toast('Put your salary in under Your pay first'); render(); return; }
+    r.salary = C.r2(before.salary * (1 + v / 100));
+    if (before.london > 0) r.london = C.r2(before.london * (1 + v / 100));
+    commit('the pay rise');
+    return;
+  }
   const val = el.dataset.set ? parseInput(el) : null;
   // a figure the keyboard could not make sense of, or a date that must be there, is refused rather than wiped
   if (el.dataset.set && (val === undefined || (val === null && el.required))) {

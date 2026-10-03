@@ -67,8 +67,13 @@ London weighting (`pay.london`, £ a period) sits beside the salary rather than
 among the "Every period" lines, because it moves with pay: a rise can carry a
 new London figure as well as, or instead of, a new salary, and the shortfall is
 back-paid with the rest (`londonBack`). It is taxed and NI'd like pay but is not
-part of the hourly rate, so overtime and holiday pay leave it out. The settings
-offer the same percentage as the salary rise as one tap. A single plain London
+part of the hourly rate, so overtime and holiday pay leave it out. A rise can be
+typed either way — as a percentage, or as the new salary — and each box shows
+what the other comes to. A percentage is taken of the figures in force before
+the change (`payBefore`) and is turned into the new salary and London weighting,
+which are what is stored, so it moves the London weighting by the same amount;
+a salary typed straight in leaves the London weighting alone, with the same
+percentage offered as one tap. A single plain London
 line under Every period is moved across on load, once; one with dates on it, or
 more than one, is left alone, and having it in both places is flagged as
 counting it twice. Blank settings fall back to a

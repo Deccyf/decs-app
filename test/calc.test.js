@@ -1222,3 +1222,11 @@ test('London weighting is taxed like pay but is not part of overtime or holiday 
   assert.equal(withL.hourly, without.hourly);
   assert.deepEqual(withL.hpa.map(y => y.qualifying), without.hpa.map(y => y.qualifying), 'and not in holiday pay');
 });
+
+test('a pay change starts from the figures in force before its date', () => {
+  const p = pay({ salary: 56351, london: 178.8, rises: [
+    { from: '2025-04-01', salary: 54000, london: 170 }, { from: '2026-04-01', salary: 58379.64, london: null }] });
+  assert.deepEqual(C.payBefore(p, '2026-04-01', 1), { salary: 54000, london: 170 }, 'the 2025 change, not the base or itself');
+  assert.deepEqual(C.payBefore(p, '2025-04-01', 0), { salary: 56351, london: 178.8 }, 'nothing earlier: the base figures');
+  assert.deepEqual(C.payBefore(p, '', 2), { salary: 58379.64, london: 170 }, 'no date yet: after every change');
+});

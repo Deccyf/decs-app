@@ -250,13 +250,21 @@ function risesList(p) {
         ? `Blank leaves the London weighting at ${C.gbp(c.prevLondon || C.num(S.pay.london))} a period.${c.sameLondon ? ` The same ${C.rate(c.pct)} as the salary makes it ${C.gbp(c.sameLondon)}.` : ''}`
         : (() => { const was = c.prevLondon ?? C.num(S.pay.london);       // a rise still half filled in is not worked out yet
           return `London weighting ${C.gbp(was)} → ${C.gbp(C.num(x.london))} a period${was ? ' (' + (C.num(x.london) >= was ? '+' : '') + C.rate(C.num(x.london) / was - 1) + ')' : ''}.`; })();
-    return `<div class="erow">${field('Effective from', inp(`pay.rises.${i}.from`, x.from, 'date'))}${field('New annual salary', inp(`pay.rises.${i}.salary`, x.salary))}
-      ${field('New London weighting (£ a period)', inp(`pay.rises.${i}.london`, x.london, 'number', 'min="0"'))}${field('Backpay paid on (blank = no backpay)', inp(`pay.rises.${i}.arrearsOn`, x.arrearsOn, 'date'))}
+    /* Either box will do: a percentage works out the new salary and London
+       weighting from the figures before this change, and a salary typed
+       straight in shows the percentage it comes to. */
+    const before = C.payBefore(S.pay, x.from, i);
+    const pct = C.num(x.salary) > 0 && before.salary > 0 ? C.num(x.salary) / before.salary - 1 : null;
+    return `<div class="erow">${field('Effective from', inp(`pay.rises.${i}.from`, x.from, 'date'))}
+      ${field('Pay rise %', `<input type="number" inputmode="decimal" step="any" id="risepct-${i}" data-rise-pct="${i}" value="${pct === null ? '' : +(pct * 100).toFixed(2)}" placeholder="e.g. 3.6">`)}
+      ${field('New annual salary', inp(`pay.rises.${i}.salary`, x.salary))}${field('New London weighting (£ a period)', inp(`pay.rises.${i}.london`, x.london, 'number', 'min="0"'))}
       <div class="full muted small">${london}${blank(x.london) && c.sameLondon ? `<div class="btnrow"><button class="btn ghost sm" data-act="riseLondon" data-i="${i}" data-v="${c.sameLondon}">Use ${C.gbp(c.sameLondon)}</button></div>` : ''}</div>
+      ${field('Backpay paid on (blank = no backpay)', inp(`pay.rises.${i}.arrearsOn`, x.arrearsOn, 'date'))}<div></div>
       <div class="field full"><label>Backpay on overtime too</label><label class="check"><input type="checkbox" data-set="pay.rises.${i}.otBackpay" ${x.otBackpay ? 'checked' : ''}><span>Include the hours I logged</span></label></div>
       <div class="full muted small">${note}</div><div class="full"><button class="btn danger sm" data-act="delRise" data-i="${i}" aria-label="Remove this pay change">Remove this pay change</button></div></div>`;
   }).join('') || '<div class="muted small">No pay changes recorded. Your salary has been the same throughout.</div>';
   return `${rows}<div class="btnrow"><button class="btn sm" data-act="addRise">Add a pay change</button></div>
+    <div class="note">Type the rise as a percentage or as the new salary — either fills in the other. A percentage takes the London weighting up by the same amount too; change that box afterwards if your deal treats it differently.</div>
     <div class="note">Pay days before the change keep the old figures. If the rise was agreed late, put the date it was backdated to in the first box (the first day of the new rate, not a pay day) and the pay day the arrears land under Backpay paid on — the shortfall on every period in between, London weighting included, is worked out for you and added to that pay day. Tick the box to include the overtime hours you logged. Pension on backpay isn't modelled, so expect a few pounds either way.</div>`;
 }
 function fixedList(p) {

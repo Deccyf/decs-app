@@ -362,6 +362,20 @@ const C = (() => {
       payslipLead: lead, needsPayslip, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
+  /* The salary and London weighting a pay change starts from: the latest
+     figures set before its date — or after every change, for one with no date
+     yet — leaving the change itself out. A rise typed as a percentage is that
+     percentage of these. */
+  function payBefore(p, from, skipIdx) {
+    const none = v => v === null || v === undefined || v === '';
+    let salary = num(p.salary), london = num(p.london);
+    (p.rises || []).map((x, idx) => ({ x, idx }))
+      .filter(({ x, idx }) => idx !== skipIdx && x && isDate(x.from) && (!isDate(from) || x.from < from))
+      .sort((a, b) => a.x.from.localeCompare(b.x.from))
+      .forEach(({ x }) => { if (num(x.salary) > 0) salary = num(x.salary); if (!none(x.london)) london = num(x.london); });
+    return { salary, london };
+  }
+
   /* ---------- money ---------- */
   /* What a bill takes on a given day. A plain bill is its price. A bill linked
      to a type of debt is the repayments on that debt — but only on debts that
@@ -846,6 +860,6 @@ const C = (() => {
 
   return { r2, num, isDate, isMonth, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct, rate,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, moneyCalc, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
+    payCalc, payBefore, moneyCalc, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 

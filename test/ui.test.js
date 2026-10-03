@@ -1963,3 +1963,23 @@ test('London weighting in Your pay and under Every period is flagged as counted 
   const page = await open(t, { data, tab: 'pay' });
   assert.match(await page.$eval('#view', e => e.textContent), /London weighting is counted twice/);
 });
+
+test('a pay rise can be typed as a percentage, or as the salary, and each shows the other', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.pay, { salary: 56351, london: 178.8, rises: [{ from: '2026-04-01', salary: null, london: null, arrearsOn: '2026-10-23', otBackpay: true }] });
+  const page = await open(t, { on: '2026-10-03', data, tab: 'pay' });
+  await page.click('details[data-key="rises"] summary'); await page.waitForTimeout(200);
+  await page.fill('[data-rise-pct="0"]', '3.6');
+  await page.dispatchEvent('[data-rise-pct="0"]', 'change'); await page.waitForTimeout(350);
+  let r = (await stored(page)).pay.rises[0];
+  assert.deepEqual([r.salary, r.london], [58379.64, 185.24], 'both worked out from the figures before it');
+  assert.equal(await page.$eval('[data-rise-pct="0"]', e => e.value), '3.6', 'and the box keeps saying 3.6');
+  assert.match(await page.$eval('details[data-key="rises"]', e => e.textContent.replace(/\s+/g, ' ')), /basic £955\.52 \+ London weighting £39\.56/);
+
+  // the salary typed straight in: the percentage follows it
+  await page.fill('[data-set="pay.rises.0.salary"]', '58605.04');
+  await page.dispatchEvent('[data-set="pay.rises.0.salary"]', 'change'); await page.waitForTimeout(350);
+  assert.equal(await page.$eval('[data-rise-pct="0"]', e => e.value), '4');
+  r = (await stored(page)).pay.rises[0];
+  assert.equal(r.london, 185.24, 'typing the salary leaves the London weighting as it was');
+});
