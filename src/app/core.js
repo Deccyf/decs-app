@@ -6,6 +6,8 @@ const PAY_ONLY = !!SEED.payOnly;
 const SUN = SEED.sundayLabel || 'Sunday premium';
 const clone = o => JSON.parse(JSON.stringify(o));
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
+// an "Every period" line that is really the London weighting
+const isLondonLine = f => /london/i.test(String(f.name || '')) && f.treatment === 'Allowance';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const $ = s => document.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -250,6 +252,17 @@ function normalize() {
   m.months = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
   const P = S.pay;
   ['fixed', 'rises', 'taxYears'].forEach(k => { arr(P, k); P[k] = P[k].filter(isObj); });
+  /* London weighting used to be one of the "Every period" lines. It is part of
+     pay — it goes up with a pay rise and is back-paid with one — so a single
+     plain London line is moved beside the salary, once. A London line with
+     dates on it, or more than one, is left where it is: moving those would
+     change pay days they never applied to. */
+  if (P.london === undefined) {
+    const lines = P.fixed.filter(isLondonLine);
+    const one = lines.length === 1 && !lines[0].from && !lines[0].to && C.num(lines[0].amount) > 0 ? lines[0] : null;
+    P.london = one ? C.r2(C.num(one.amount)) : null;
+    if (one) P.fixed = P.fixed.filter(f => f !== one);
+  }
   // a tax year with no real start date is never in force, and "Add next tax year" would build NaN-04-06 from it
   P.taxYears = P.taxYears.filter(y => C.isDate(y.from));
   ['hours', 'hpaHistory', 'tax', 'actual'].forEach(k => obj(P, k));

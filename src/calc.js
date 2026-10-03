@@ -106,24 +106,34 @@ const C = (() => {
        back to what a fresh install starts with. */
     const weeks = num(p.weeksYear) || 52.1667, hoursWk = num(p.hoursWeek) || 35;
     const ped = blank(p.periodEndDays) ? 6 : num(p.periodEndDays);
-    // idx is the rise's place in the list as typed, which is what the settings edit
-    const rises = (p.rises || []).map((x, idx) => x && isDate(x.from) && num(x.salary) > 0 ? Object.assign({}, x, { idx }) : null)
+    /* A pay rise can move the salary, the London weighting, or both — a rise
+       that leaves one of them blank leaves it where it was. idx is the rise's
+       place in the list as typed, which is what the settings edit. */
+    const setSalary = r => num(r.salary) > 0, setLondon = r => !blank(r.london) && num(r.london) >= 0;
+    const rises = (p.rises || []).map((x, idx) => x && isDate(x.from) && (setSalary(x) || setLondon(x)) ? Object.assign({}, x, { idx }) : null)
       .filter(Boolean).sort((a, b) => a.from.localeCompare(b.from));
-    /* The salary in payment across a pay period. A rise with a backpay date only
-       enters normal pay from that pay day — the shortfall before it is paid as
-       backpay — unless it is in `forced`, which is how that shortfall is measured.
-       Worked from the dates the salary changes on rather than day by day. */
-    const avgSalary = (start, payday, forced) => {
+    /* What is in payment across a pay period — the salary, or the London
+       weighting. A rise with a backpay date only enters normal pay from that pay
+       day — the shortfall before it is paid as backpay — unless it is in
+       `forced`, which is how that shortfall is measured. Worked from the dates
+       the figure changes on rather than day by day. */
+    const avgOf = (key, base, sets) => (start, payday, forced) => {
       const end = addDays(start, 28);
-      let s = num(p.salary), d = start, total = 0;
+      let s = base, d = start, total = 0;
       rises.forEach(r => {
+        if (!sets(r)) return;
         if (r.arrearsOn && payday < r.arrearsOn && !(forced && forced.has(r))) return;
         if (r.from >= end) return;
         if (r.from > d) { total += s * daysBetween(d, r.from); d = r.from; }
-        s = num(r.salary);
+        s = num(r[key]);
       });
       return (total + s * daysBetween(d, end)) / 28;
     };
+    const avgSalary = avgOf('salary', num(p.salary), setSalary);
+    /* London weighting is paid by the period, on top of the salary: taxed and
+       NI'd like it, but not part of the hourly rate, so not of overtime or
+       holiday pay either. */
+    const avgLondon = avgOf('london', num(p.london), setLondon);
     const basicOf = sal => r2(sal / weeks * 4);
     const hourlyOf = sal => r2(sal / weeks / hoursWk);
     // fixed items can have a start and an end; a period is charged for the days the item was in force
@@ -208,17 +218,25 @@ const C = (() => {
       const h = (p.hours && p.hours[payday]) || {};
       const ot = num(h.ot), sun = num(h.sun);
       const sal = avgSalary(start, payday), rowBasic = basicOf(sal), rowHourly = hourlyOf(sal);
-      const fix = itemsOn(start);
+      const fix = itemsOn(start), london = r2(avgLondon(start, payday));
       const sunRate = p.sundayAtT ? rowHourly : num(p.sundayRate);
       const otPay = r2(ot * rowHourly), sunPay = r2(sun * sunRate);
-      rows.push({ payday, start, end, ot, sun, otPay, sunPay, basic: rowBasic, hourly: rowHourly, salary: sal,
+      rows.push({ payday, start, end, ot, sun, otPay, sunPay, basic: rowBasic, hourly: rowHourly, salary: sal, london,
         allow: fix.allow, sacr: fix.sacr, after: fix.after,
         refYear: end.slice(0, 4), taxYear: aprilStart(payday), rates: ratesOn(payday), hpaPay: 0, backpay: 0, backpayOt: 0,
         past: payday <= tod, next: payday === next, warm: payday < shownFrom });
     }
     // backpay: for a rise with a backpay date, the shortfall on every period between the effective date and that pay day
     const riseCalc = rises.map((r, k) => {
-      const out = { idx: r.idx, from: r.from, salary: num(r.salary), arrearsOn: r.arrearsOn || null, otBackpay: !!r.otBackpay, basic: 0, ot: 0, total: 0, periods: 0 };
+      /* What each figure was just before this rise, so the settings can offer
+         the London weighting at the same percentage as the salary. */
+      const prior = rises.slice(0, k).reverse();
+      const prevSalary = num((prior.find(setSalary) || { salary: p.salary }).salary);
+      const prevLondon = num((prior.find(setLondon) || { london: p.london }).london);
+      const pct = setSalary(r) && prevSalary > 0 ? num(r.salary) / prevSalary - 1 : null;
+      const out = { idx: r.idx, from: r.from, salary: setSalary(r) ? num(r.salary) : null, london: setLondon(r) ? num(r.london) : null,
+        prevSalary, prevLondon, pct, sameLondon: pct !== null && prevLondon > 0 ? r2(prevLondon * (1 + pct)) : null,
+        arrearsOn: r.arrearsOn || null, otBackpay: !!r.otBackpay, basic: 0, ot: 0, londonBack: 0, total: 0, periods: 0 };
       if (!r.arrearsOn) return out;
       /* Each rise is measured against the ones before it rather than against the
          old salary, or two rises backdated over the same months would both be
@@ -227,12 +245,17 @@ const C = (() => {
       rows.forEach(row => {
         if (row.payday >= r.arrearsOn || row.end < r.from) return;
         const paid = avgSalary(row.start, row.payday, before), due = avgSalary(row.start, row.payday, upTo);
-        if (due <= paid) return;
+        const lPaid = avgLondon(row.start, row.payday, before), lDue = avgLondon(row.start, row.payday, upTo);
+        if (due <= paid && lDue <= lPaid) return;
         out.periods++;
-        out.basic += basicOf(due) - basicOf(paid);
-        if (r.otBackpay) out.ot += (row.ot + (p.sundayAtT ? row.sun : 0)) * (hourlyOf(due) - hourlyOf(paid));
+        if (due > paid) {
+          out.basic += basicOf(due) - basicOf(paid);
+          if (r.otBackpay) out.ot += (row.ot + (p.sundayAtT ? row.sun : 0)) * (hourlyOf(due) - hourlyOf(paid));
+        }
+        if (lDue > lPaid) out.londonBack += lDue - lPaid;
       });
-      out.basic = r2(out.basic); out.ot = r2(out.ot); out.total = r2(out.basic + out.ot);
+      out.basic = r2(out.basic); out.ot = r2(out.ot); out.londonBack = r2(out.londonBack);
+      out.total = r2(out.basic + out.ot + out.londonBack);
       const target = rows.find(x => x.payday === r.arrearsOn) || rows.find(x => x.payday >= r.arrearsOn);
       if (target && out.total) { target.backpay = r2(target.backpay + out.total); target.backpayOt = r2(target.backpayOt + out.ot); }
       return out;
@@ -240,11 +263,11 @@ const C = (() => {
 
     // EU holiday pay (Southeastern HPA): 4/52 of the calendar year's qualifying pay, paid on the first pay day in March of the next year
     const curRow = rows.find(r => r.payday === next) || rows.find(r => !r.past) || rows[0]
-      || { allow: 0, sacr: 0, after: 0, basic: basicOf(num(p.salary)), hourly: hourlyOf(num(p.salary)) };
+      || { allow: 0, sacr: 0, after: 0, london: num(p.london), basic: basicOf(num(p.salary)), hourly: hourlyOf(num(p.salary)) };
     // the rate being paid now, rises included, rather than the salary first typed
-    const basic = curRow.basic, hourly = curRow.hourly;
+    const basic = curRow.basic, hourly = curRow.hourly, london = curRow.london;
     const allow = curRow.allow, sacr = curRow.sacr, after = curRow.after;
-    const basicOnlyTaxable = basic + allow - sacr;
+    const basicOnlyTaxable = basic + london + allow - sacr;
     const marginalNet = x => x - (paye(basicOnlyTaxable + x) - paye(basicOnlyTaxable)) - (ni(basicOnlyTaxable + x) - ni(basicOnlyTaxable));
     const hist = p.hpaHistory || {};
     const hpaYears = {};
@@ -266,7 +289,7 @@ const C = (() => {
       if (r.taxYear !== curYear) { curYear = r.taxYear; n = 0; cum = 0; paid = 0; }   // new tax year, start again
       const e = r.rates;
       const extraGross = r.otPay + r.sunPay;
-      const taxable = r2(r.basic + r.allow + r.otPay + r.sunPay + r.hpaPay + r.backpay - r.sacr);
+      const taxable = r2(r.basic + r.london + r.allow + r.otPay + r.sunPay + r.hpaPay + r.backpay - r.sacr);
       let tax, marginal;
       n++;
       /* A week 1 / month 1 code has every period stand alone. So does a 14th pay
@@ -335,7 +358,7 @@ const C = (() => {
     const paCheck = { taxable: totals.taxable, allowance: paNow, should: r2(paShould),
       stale: totals.taxable > 100000 && paNow > paShould };
     let nextIdx = shown.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(shown.findIndex(r => !r.past), 0);
-    return { basic, hourly, allow, sacr, after, rows: shown, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
+    return { basic, hourly, london, allow, sacr, after, rows: shown, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
       payslipLead: lead, needsPayslip, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 

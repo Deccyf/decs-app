@@ -38,6 +38,7 @@
     "payslipLead": 4,
     "personalAllowance": 12579,
     "taxCode": "1257L",
+    "london": null,
     "fixed": [],
     "hours": {},
     "hpaHistory": {},

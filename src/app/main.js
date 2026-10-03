@@ -182,7 +182,8 @@ document.addEventListener('click', async e => {
   if (a === 'addYear') { const Y = S.pay.taxYears, last = Y[Y.length - 1];
     Y.push(Object.assign({}, last, { from: (+String(last.from).slice(0, 4) + 1) + '-04-06' })); commit('adding a tax year'); return; }
   if (a === 'delYear') { if (S.pay.taxYears.length > 1) { S.pay.taxYears.splice(+d.i, 1); removed('a tax year'); } return; }
-  if (a === 'addRise') { S.pay.rises.push({ from: '', salary: null, arrearsOn: '', otBackpay: true }); commit('adding a pay change'); return; }
+  if (a === 'addRise') { S.pay.rises.push({ from: '', salary: null, london: null, arrearsOn: '', otBackpay: true }); commit('adding a pay change'); return; }
+  if (a === 'riseLondon') { const r = S.pay.rises[+d.i]; if (!r || !isFinite(+d.v)) return; r.london = +d.v; commit('the London weighting rise'); return; }
   if (a === 'delRise') { S.pay.rises.splice(+d.i, 1); removed('a pay change'); return; }
   if (a === 'addFixed') { S.pay.fixed.push({ name: '', amount: null, treatment: 'After-tax', from: '', to: '' }); ui.editFixed = true; commit('adding an item'); return; }
   if (a === 'delFixed') { const f = S.pay.fixed[+d.i]; S.pay.fixed.splice(+d.i, 1); removed(f && f.name || 'an item'); return; }

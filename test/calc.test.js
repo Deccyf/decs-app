@@ -1190,3 +1190,35 @@ test('a date never splits across two lines', () => {
     assert.ok(!s.includes(' ') && / /.test(s), JSON.stringify(s));
   assert.equal(C.fmtD('2027-03-12'), '12 Mar 2027');
 });
+
+/* ------------------------------------------- London weighting in pay rises -- */
+const dec = x => pay(Object.assign({ salary: 56351, london: 178.80, personalAllowance: 12139 }, x));
+
+test('a pay rise carries the London weighting, back-paid with the salary', () => {
+  const p = C.payCalc(dec({ rises: [{ from: '2026-04-01', salary: 58379.64, london: 185.24, arrearsOn: '2026-10-23' }] }), '2026-10-03');
+  const r = p.rises[0];
+  assert.equal(r.basic, 955.52);
+  assert.equal(r.londonBack, 39.56, '£6.44 a period from 1 April: four days of the March period, then six whole ones');
+  assert.equal(r.total, 995.08);
+  const row = d => p.rows.find(x => x.payday === d);
+  assert.deepEqual([row('2026-09-25').london, row('2026-10-23').london], [178.8, 185.24], 'the new figure in normal pay from the arrears pay day');
+  assert.equal(row('2026-10-23').backpay, 995.08);
+  assert.equal(r.sameLondon, 185.24, 'the same 3.6% as the salary, offered');
+});
+
+test('a change to the London weighting alone leaves the salary where it is', () => {
+  const p = C.payCalc(dec({ rises: [{ from: '2026-04-01', salary: null, london: 185.24, arrearsOn: '2026-10-23' }] }), '2026-10-03');
+  assert.equal(p.rises[0].basic, 0);
+  assert.equal(p.rises[0].londonBack, 39.56);
+  assert.equal(p.rows.find(x => x.payday === '2026-11-20').basic, 4320.84);
+});
+
+test('London weighting is taxed like pay but is not part of overtime or holiday pay', () => {
+  const hours = { '2026-10-23': { ot: 10 } };
+  const withL = C.payCalc(dec({ hours }), '2026-10-03'), without = C.payCalc(dec({ hours, london: null }), '2026-10-03');
+  const a = withL.rows.find(x => x.payday === '2026-10-23'), b = without.rows.find(x => x.payday === '2026-10-23');
+  assert.equal(C.r2(a.taxable - b.taxable), 178.8, 'in the taxable pay');
+  assert.equal(a.otPay, b.otPay, 'not in the overtime rate');
+  assert.equal(withL.hourly, without.hourly);
+  assert.deepEqual(withL.hpa.map(y => y.qualifying), without.hpa.map(y => y.qualifying), 'and not in holiday pay');
+});

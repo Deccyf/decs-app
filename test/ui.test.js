@@ -1919,3 +1919,47 @@ test('the collection chips say which one is showing', skip, async t => {
   const page = await open(t, { tab: 'lists' });
   assert.deepEqual(await page.$$eval('.chips .chip[aria-pressed="true"]', cs => cs.map(c => c.textContent)), ['Base Set']);
 });
+
+/* ---------- London weighting ---------- */
+test('a plain London line under Every period moves beside the salary, once', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.fixed = [{ name: 'London Allowance', amount: 178.8, treatment: 'Allowance', from: '', to: '' },
+    { name: 'Pension', amount: 120, treatment: 'Sacrifice', from: '', to: '' }];
+  const page = await open(t, { data, tab: 'pay' });
+  const s = await stored(page);
+  assert.equal(s.pay.london, 178.8);
+  assert.deepEqual(s.pay.fixed.map(f => f.name), ['Pension'], 'and is not counted twice');
+  assert.match(await page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' ')), /London weighting\s*£178\.80/);
+});
+
+test('a London line with dates on it is left where it is', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.fixed = [{ name: 'London Allowance', amount: 178.8, treatment: 'Allowance', from: '2025-06-01', to: '' }];
+  data.pay.rises = [{ from: '2026-04-01', salary: 42682, london: null, arrearsOn: '2026-10-23', otBackpay: true }];
+  const page = await open(t, { data, tab: 'pay' });
+  const s = await stored(page);
+  assert.equal(s.pay.london, null);
+  assert.equal(s.pay.fixed.length, 1);
+  await page.click('details[data-key="rises"] summary'); await page.waitForTimeout(200);
+  assert.match(await page.$eval('details[data-key="rises"]', e => e.textContent), /London weighting is a line under Every period/);
+});
+
+test('a pay rise offers the London weighting at the same percentage, and back-pays it', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.pay, { salary: 56351, london: 178.8, rises: [{ from: '2026-04-01', salary: 58379.64, london: null, arrearsOn: '2026-10-23', otBackpay: true }] });
+  const page = await open(t, { on: '2026-10-03', data, tab: 'pay' });
+  await page.click('details[data-key="rises"] summary'); await page.waitForTimeout(200);
+  const box = () => page.$eval('details[data-key="rises"]', e => e.textContent.replace(/\s+/g, ' '));
+  assert.match(await box(), /Blank leaves the London weighting at £178\.80 a period\. The same 3\.6% as the salary makes it £185\.24\./);
+  await page.click('[data-act="riseLondon"][data-i="0"]'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).pay.rises[0].london, 185.24);
+  assert.match(await box(), /London weighting £178\.80 → £185\.24 a period \(\+3\.6%\)/);
+  assert.match(await box(), /basic £955\.52 \+ London weighting £39\.56 across 7 pay days/);
+});
+
+test('London weighting in Your pay and under Every period is flagged as counted twice', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data.pay, { london: 178.8, fixed: [{ name: 'London weighting', amount: 178.8, treatment: 'Allowance', from: '', to: '' }] });
+  const page = await open(t, { data, tab: 'pay' });
+  assert.match(await page.$eval('#view', e => e.textContent), /London weighting is counted twice/);
+});
