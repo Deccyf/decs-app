@@ -192,7 +192,6 @@ const VIEWS = {
   money() {
     const opt = flowOpt(), m = C.moneyCalc(S.money, null, opt), p = payCalcNow();
     const fl = C.runway(S.money, p, opt);
-    const flows = C.periodFlows(S.money, p, opt, ui.flowPeriods);
     const cur = m.thisMonthKey;
     // the last twelve months and next month; the rest are one tap away
     const nextKey = C.addMonths(cur + '-01', 1).slice(0, 7), yearAgo = C.addMonths(cur + '-01', -11).slice(0, 7);
@@ -200,6 +199,8 @@ const VIEWS = {
     const hiddenMonths = m.months.length - months.length;
 
     const sec = MONEY_SECTIONS.some(x => x.v === ui.moneyTab) ? ui.moneyTab : 'now';
+    // the pay-period table is only on the first section, so only that one works it out
+    const flows = sec === 'now' ? C.periodFlows(S.money, p, opt, ui.flowPeriods) : [];
     let h = moneySwitcher(sec);
     if (sec === 'now') {
     /* --- 1. cash flow to the next pay day --- */
@@ -277,8 +278,8 @@ const VIEWS = {
     h += `<div class="card"><h2>Disposable by pay period<span class="hint">from bill dates</span></h2>
       <div class="muted small">You're paid every 28 days but bills come out monthly, so some periods carry two of the same bill and some carry none. This counts what actually leaves inside each period.</div>
       <div class="mt10">${flows.map(f => {
-        const dupes = {}; f.events.forEach(e => { dupes[e.name] = (dupes[e.name] || 0) + 1; });
-        const twice = Object.keys(dupes).filter(k => dupes[k] > 1);
+        const dupes = new Map(); f.events.forEach(e => dupes.set(e.name, (dupes.get(e.name) || 0) + 1));
+        const twice = [...dupes.keys()].filter(k => dupes.get(k) > 1);
         const share = f.net > 0 ? Math.min(f.outgoings / f.net, 1) : 0;
         return `<div class="perrow"><div><b>${esc(C.fmtDM(f.from))} – ${esc(C.fmtDM(f.to))}</b>
             <small class="meta">${C.gbp(f.net, 0)} in · ${C.gbp(f.outgoings, 0)} out · ${f.events.length} bills${twice.length ? ' · twice: ' + esc(twice.join(', ')) : ''}</small></div>

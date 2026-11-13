@@ -173,6 +173,16 @@ function normalize() {
   ['bills', 'months', 'debts'].forEach(k => { arr(m, k); m[k] = m[k].filter(isObj); });
   // a month is YYYY-MM; a whole date is cut to its month, and anything else is dropped rather than left to throw
   const monthOf = v => C.isMonth(v) ? v : C.isDate(v) ? v.slice(0, 7) : null;
+  /* A restored file is somebody else's typing. Words that are not words and
+     days that are not days are put right here, once, rather than left for a
+     screen to trip over: one bad value should not stop the app drawing. A
+     blank stays blank; only something that cannot be read is dropped. */
+  const blankish = v => v === null || v === undefined || v === '';
+  const text = (o, ...ks) => ks.forEach(k => { const v = o[k];
+    if (!blankish(v) && typeof v !== 'string') o[k] = typeof v === 'number' && isFinite(v) ? String(v) : ''; });
+  const day = (o, ...ks) => ks.forEach(k => { if (!blankish(o[k]) && !C.isDate(o[k])) o[k] = null; });
+  // the buttons find a row by its id as text, so an id is text: a number is written out, anything else is made afresh
+  const ident = x => { if (typeof x.id === 'number' && isFinite(x.id)) x.id = String(x.id); else if (typeof x.id !== 'string' || !x.id) x.id = uid(); };
   /* Savings used to be several pots, each holding its own money. It is really
      one balance with a shopping list against it, so the old pots are added up
      into that balance and each becomes a thing being saved for. Runs once: an
@@ -195,30 +205,36 @@ function normalize() {
   if (!Array.isArray(sv.goals)) sv.goals = [];
   sv.goals = sv.goals.filter(g => g && typeof g === 'object');
   sv.goals.forEach(g => {
-    if (!g.id) g.id = uid();
+    ident(g);
     if (g.cost === undefined) g.cost = null;
     if (g.got === undefined) g.got = null;
     if (g.paid === undefined) g.paid = null;
+    text(g, 'name'); day(g, 'got');
   });
   if (m.buffer === undefined) m.buffer = 0;
   if (m.overdraft === undefined) m.overdraft = 0;
   if (m.amex === undefined) m.amex = null;
   if (typeof m.amexBefore !== 'boolean') m.amexBefore = false;
   if (typeof m.netLongTerm !== 'boolean') m.netLongTerm = false;
-  if (m.amexUndo === undefined) m.amexUndo = null;
+  // an undo for Pay now is the card figure, the adjustment and the day; anything else is not one
+  if (!isObj(m.amexUndo) || !C.isDate(m.amexUndo.at)) m.amexUndo = null;
   m.balanceAdj = C.r2(C.num(m.balanceAdj));
   if (!Array.isArray(m.balanceLog)) m.balanceLog = [];
-  m.balanceLog = m.balanceLog.filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on)).slice(-LOG_MAX);
-  if (S.backupOn === undefined) S.backupOn = null;
+  m.balanceLog = m.balanceLog.filter(x => isObj(x) && C.isDate(x.on)).slice(-LOG_MAX);
+  if (!C.isDate(S.backupOn)) S.backupOn = null;
   if (m.balance === undefined) m.balance = null;
-  if (m.balanceOn === undefined) m.balanceOn = null;
+  if (!C.isDate(m.balanceOn)) m.balanceOn = null;
   // a balance carried over from before this feature has no date — treat it as true today
   if (m.balance !== null && m.balance !== undefined && m.balance !== '' && !m.balanceOn) m.balanceOn = C.today();
   if (m.dueShift !== 'exact' && m.dueShift !== 'prev' && m.dueShift !== 'next') m.dueShift = 'next';
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
   m.bills.forEach(b => {
-    if (!b.id) b.id = uid();
-    if (b.dueDay === undefined) b.dueDay = null;
+    ident(b);
+    text(b, 'name', 'category');
+    if (!b.category) b.category = 'Other';             // what every total already counted it as
+    // a whole day from 1 to 31, which is how the sums have always read it (45 was the last day of the month)
+    const dd = Math.round(C.num(b.dueDay));
+    b.dueDay = dd >= 1 ? Math.min(dd, 31) : null;
     b.started = monthOf(b.started); b.ended = monthOf(b.ended);
     if (b.link !== 'Short-term' && b.link !== 'Long-term') b.link = null;
     const rv = Math.round(C.num(b.review));
@@ -228,14 +244,15 @@ function normalize() {
     b.skip = [...new Set(b.skip.map(x => Math.round(C.num(x))).filter(x => x >= 1 && x <= 12))].sort((x, y) => x - y);
   });
   m.debts.forEach(d => {
-    if (!d.id) d.id = uid();
+    ident(d);
     if (d.type !== 'Long-term') d.type = 'Short-term';
     /* The same rule as the bank balance: a figure from before dates were kept is
        taken as true today, so the repayments start coming off it from now
        rather than never. Without this, a debt entered earlier would sit still. */
+    if (!C.isDate(d.balanceOn)) d.balanceOn = null;      // not a day at all: the same as never having had one
     if (!d.balanceOn && d.balance !== null && d.balance !== undefined && d.balance !== '') d.balanceOn = C.today();
-    if (!C.isDate(d.balanceOn)) d.balanceOn = null;
-    if (!/^\d{4}-\d{2}$/.test(d.rateEnds || '')) d.rateEnds = null;
+    if (!C.isMonth(d.rateEnds)) d.rateEnds = null;
+    text(d, 'name', 'notes');
   });
   m.months = m.months.filter(x => C.isMonth(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
@@ -266,6 +283,13 @@ function normalize() {
   // a tax year with no real start date is never in force, and "Add next tax year" would build NaN-04-06 from it
   P.taxYears = P.taxYears.filter(y => C.isDate(y.from));
   ['hours', 'hpaHistory', 'tax', 'actual'].forEach(k => obj(P, k));
+  P.fixed.forEach(f => { text(f, 'name'); day(f, 'from', 'to');
+    if (!['Allowance', 'Sacrifice', 'After-tax'].includes(f.treatment)) f.treatment = 'After-tax'; });   // how the sums already took it
+  P.rises.forEach(r => day(r, 'from', 'arrearsOn'));
+  // a pay day's hours are a pair of figures; anything else there cannot be added to
+  Object.keys(P.hours).forEach(k => { if (!isObj(P.hours[k])) delete P.hours[k]; });
+  // holiday pay is kept by the calendar year it was earned in
+  Object.keys(P.hpaHistory).forEach(k => { if (!/^\d{4}$/.test(k)) delete P.hpaHistory[k]; });
   if (!C.isDate(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
   if (P.payslipLead === undefined || P.payslipLead === null || P.payslipLead === '') P.payslipLead = 4;
@@ -283,9 +307,12 @@ function normalize() {
   P.taxYears.sort((a, b) => String(a.from).localeCompare(String(b.from)));
   if (Array.isArray(S.goals)) S.goals = S.goals.join('\n');
   if (typeof S.goals !== 'string') S.goals = '';
-  ['house', 'games'].forEach(k => S[k].forEach(x => { if (!x.id) x.id = uid(); }));
-  S.games.forEach(g => { if (!C.isDate(g.date)) g.date = null; if (typeof g.game !== 'string') g.game = String(g.game ?? ''); });
-  S.house.forEach(j => { if (!['To do', 'In progress', 'Done'].includes(j.status)) j.status = 'To do'; });
+  ['house', 'games'].forEach(k => S[k].forEach(ident));
+  S.games.forEach(g => { if (!C.isDate(g.date)) g.date = null; text(g, 'game', 'notes'); if (blankish(g.game)) g.game = ''; });
+  S.house.forEach(j => { if (!['To do', 'In progress', 'Done'].includes(j.status)) j.status = 'To do'; text(j, 'job', 'notes'); day(j, 'dateDone'); });
+  S.classic.forEach(c => text(c, 'set', 'no', 'card', 'grade'));
+  S.mega.forEach(c => text(c, 'no', 'card', 'grade'));
+  S.psm.forEach(p => { text(p, 'titles'); if (!blankish(p.released) && !C.isMonth(p.released)) p.released = null; });
 }
 function setPath(o, p, v) {
   const ks = p.split('.'); const last = ks.pop();
@@ -548,7 +575,7 @@ const field = (label, inner) => {
   return `<div class="field"><label${id ? ` for="${id}"` : ''}>${esc(label)}</label>${tied}</div>`;
 };
 const inp = (path, val, type = 'number', extra = '') => {
-  const v = val === null || val === undefined ? '' : val;
+  const v = val === null || val === undefined || typeof val === 'object' ? '' : val;      // nothing readable is an empty box
   const attrs = type === 'number' ? 'type="number" inputmode="decimal" step="any"' : `type="${type}"`;
   return `<input ${attrs} data-set="${esc(path)}" value="${esc(v)}" ${extra}>`;
 };
@@ -562,7 +589,13 @@ const signedInp = (path, val, extra = '') => {
     <button type="button" class="sgn${neg ? ' on' : ''}" data-act="sign" aria-label="Make this ${neg ? 'positive' : 'negative'}">${neg ? '−' : '+'}</button></div>`;
 };
 const pctInp = (path, val) => `<input type="number" inputmode="decimal" step="any" data-set="${esc(path)}" data-kind="pct" value="${val == null ? '' : +(val * 100).toFixed(4)}">`;
-const sel = (path, val, opts) => `<select data-set="${esc(path)}">${opts.map(o => `<option${o === val ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+/* A stored value that is not one of the choices — a category from an older
+   list, say — is added as a choice of its own. Left out, the box showed the
+   first option instead, which is not what was stored. */
+const sel = (path, val, opts) => {
+  const all = val !== null && val !== undefined && val !== '' && !opts.includes(val) ? [val, ...opts] : opts;
+  return `<select data-set="${esc(path)}">${all.map(o => `<option${o === val ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+};
 const bar = (p, cls = '') => `<div class="bar ${cls}"><i style="width:${Math.max(0, Math.min(100, Math.round((p || 0) * 100)))}%"></i></div>`;
 const detailsBlock = (key, title, inner) => `<details data-key="${key}"${ui.open[key] ? ' open' : ''}><summary>${esc(title)}</summary>${inner}</details>`;
 const segment = (act, val, opts) => `<div class="seg" role="group">${opts.map(o =>

@@ -257,11 +257,45 @@ function fieldLabel(el) {
   const txt = (l && l.textContent || el.getAttribute('aria-label') || '').trim();
   return txt ? `changing ${txt}` : 'the last edit';
 }
+/* A date typed on a keyboard fires change at every digit that leaves a whole
+   date behind it — 0002, then 0020, then 0202 on the way to 2026 — and each
+   one redrew the page, which put the caret back at the start of the box: on a
+   computer a date could not be typed past its first part, and the year 0002
+   was saved on the way. While keys are going into a date or month box its
+   change waits for the box to be left, or for Enter. A date picked from a
+   calendar has no keys behind it, so it still lands at once, as on a phone. */
+let dateKeys = null, dateWaiting = null;
+const isDateBox = el => !!el && el.tagName === 'INPUT' && (el.type === 'date' || el.type === 'month');
+const dateSettle = el => { dateKeys = dateWaiting = null; el.dispatchEvent(new Event('change', { bubbles: true })); };
+document.addEventListener('keydown', e => {
+  const el = e.target;
+  if (!isDateBox(el) || e.key === 'Tab') return;
+  if (e.key === 'Enter') { if (dateWaiting === el) dateSettle(el); return; }
+  dateKeys = el;
+}, true);
+document.addEventListener('pointerdown', e => { if (dateKeys === e.target && dateWaiting !== e.target) dateKeys = null; }, true);
+document.addEventListener('focusout', e => {
+  const el = e.target;
+  if (dateKeys !== el && dateWaiting !== el) return;
+  // the caret stepping from the day to the month is a blur and a focus as well, so look once it has settled
+  setTimeout(() => {
+    if (document.activeElement === el) return;
+    if (dateWaiting === el) dateSettle(el); else if (dateKeys === el) dateKeys = null;
+  }, 0);
+}, true);
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'importFile') { if (el.files[0]) importBackup(el.files[0]); el.value = ''; return; }
-  if (el.dataset.hours) { const hv = C.num(el.value); if (!isFinite(hv)) { toast("That isn't a number — left as it was"); render(); return; }
-    const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.r2(hv)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit('the hours'); return; }
+  if (isDateBox(el) && dateKeys === el) { dateWaiting = el; return; }      // still being typed: see above
+  if (el.dataset.hours) {
+    // a lone "-" or "1e" reads as an empty box: that is not the same as clearing it, and must not wipe the hours
+    const hv = parseInput(el);
+    if (hv === undefined) { toast("That isn't a number — left as it was"); render(); return; }
+    const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {};
+    h[el.dataset.hours] = Math.max(0, C.r2(hv || 0));
+    if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday];
+    commit('the hours'); return;
+  }
   /* A pay rise typed as a percentage: worked into the new salary and London
      weighting from the figures in force before it, which is what is stored. */
   if (el.dataset.risePct !== undefined) {
@@ -276,23 +310,31 @@ document.addEventListener('change', e => {
     commit('the pay rise');
     return;
   }
-  const val = el.dataset.set ? parseInput(el) : null;
+  let val = el.dataset.set ? parseInput(el) : null;
   // a figure the keyboard could not make sense of, or a date that must be there, is refused rather than wiped
   if (el.dataset.set && (val === undefined || (val === null && el.required))) {
     toast(val === undefined ? "That isn't a number — left as it was" : 'That needs a date — left as it was'); render(); return;
   }
+  // a date box will take the year 0002, or 20266: whole dates, but not ones any sum here can be worked from
+  if (val !== null && el.dataset.set && ((el.type === 'date' && !C.isDate(val)) || (el.type === 'month' && !C.isMonth(val)))) {
+    toast("That date is out of range — left as it was"); render(); return;
+  }
+  // the day a bill leaves is a whole day of the month: 45 is kept as the 31st, which is how the dates treat it anyway
+  if (val !== null && /^money\.bills\.\d+\.dueDay$/.test(el.dataset.set || '')) val = Math.round(val) >= 1 ? Math.min(Math.round(val), 31) : null;
   const amt = el.dataset.set && el.dataset.set.match(/^money\.bills\.(\d+)\.amount$/);
   if (amt) { billAmountChanged(+amt[1], val); return; }
   if (el.dataset.set) {
     /* New terms apply from today. Without this, typing the new rate when a fix
        ends re-ran the whole carry since the statement at that rate, and moved
        a mortgage by thousands for months already paid at the old one. A blank
-       APR is different: that was never a rate, just a missing one, so filling
-       it in reworks the carry from the statement, which is the honest figure. */
+       APR being filled in is different: that was never a rate, just a missing
+       one, so it reworks the carry from the statement, which is the honest
+       figure. A new repayment is new terms either way: the months already
+       paid went out at the old amount, rate or no rate. */
     const dt = el.dataset.set.match(/^money\.debts\.(\d+)\.(apr|repayment)$/);
     const dtd = dt && S.money.debts[+dt[1]];
     if (dtd) { const now = C.debtNow(dtd, S.money, C.today(), flowOpt());
-      if (now.carried && !now.noRate) { dtd.balance = now.balance; dtd.balanceOn = C.today(); } }
+      if (now.carried && !(dt[2] === 'apr' && now.noRate)) { dtd.balance = now.balance; dtd.balanceOn = C.today(); } }
     setPath(S, el.dataset.set, val);
     if (el.dataset.set === 'money.balance') balanceTyped();        // stamped, so a stale figure is obvious
     if (el.dataset.set === 'money.amex') S.money.amexUndo = null;
@@ -344,7 +386,10 @@ let hiddenAt = 0;
    nothing — as far as the phone gives the page time to do it — and nor does
    the moment before the lock screen comes back. */
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); if (pinIsSet()) document.body.classList.add('veiled'); return; }
+  if (document.hidden) {
+    if (dateWaiting) dateSettle(dateWaiting);            // a date typed but not yet left: take it before the app goes away
+    hiddenAt = Date.now(); if (pinIsSet()) document.body.classList.add('veiled'); return;
+  }
   // away long enough with a PIN set: reload so the lock screen comes back
   if (pinIsSet() && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) { location.reload(); return; }
   document.body.classList.remove('veiled');

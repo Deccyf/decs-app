@@ -1230,3 +1230,127 @@ test('a pay change starts from the figures in force before its date', () => {
   assert.deepEqual(C.payBefore(p, '2025-04-01', 0), { salary: 56351, london: 178.8 }, 'nothing earlier: the base figures');
   assert.deepEqual(C.payBefore(p, '', 2), { salary: 58379.64, london: 170 }, 'no date yet: after every change');
 });
+
+/* ----------------------------------------------- found in the second review -- */
+test('payments left are counted to the penny, the way the balance is carried', () => {
+  const left = (balance, repayment, apr) => C.debtPayoff({ balance, repayment, apr }, '2026-11-13');
+  assert.equal(left(1199.88, 99.99, 0).months, 12, 'twelve payments to the penny, not thirteen');
+  assert.equal(left(2399.76, 99.99, 0).months, 24);
+  assert.equal(left(204.12, 1.89, 0).months, 108);
+  assert.equal(left(1000.01, 100, 0).months, 11, 'a penny over is one more payment');
+  // the count is the carry: that many payments clear it, and one fewer leaves something owing
+  for (const d of [{ balance: 5000, repayment: 150, apr: 0.199, balanceOn: '2026-01-01' },
+    { balance: 742.13, repayment: 61.5, apr: 0.349, balanceOn: '2026-03-15' },
+    { balance: 180000, repayment: 958.12, apr: 0.0439, balanceOn: '2026-02-01' }]) {
+    const n = C.debtPayoff(d, d.balanceOn).months, after = k => C.debtNow(d, { bills: [], debts: [d] }, C.addMonths(d.balanceOn, k), EXACT);
+    assert.deepEqual([after(n).balance, after(n).payments], [0, n], JSON.stringify(d));
+    assert.ok(after(n - 1).balance > 0, 'not a payment sooner');
+  }
+});
+
+test('a debt that would take over a century is not given a clear date', () => {
+  assert.deepEqual(C.debtPayoff({ balance: 50000, repayment: 0.01, apr: 0 }, '2026-11-13'), { never: true });
+  assert.equal(C.debtPayoff({ balance: 120000, repayment: 100, apr: 0 }, '2026-11-13').months, 1200, 'a hundred years to the month still is');
+  assert.deepEqual(C.debtPayoff({ balance: 120100, repayment: 100, apr: 0 }, '2026-11-13'), { never: true });
+  // and the bills list says so rather than failing on a date that cannot be written
+  const m = C.moneyCalc({ bills: [{ name: 'C', dueDay: 5, started: '2020-01', link: 'Short-term' }],
+    debts: [{ type: 'Short-term', balance: 50000, repayment: 0.01, apr: 0, balanceOn: '2026-11-13' }] }, '2026-11-13', EXACT);
+  assert.equal(m.bills[0].clears, undefined);
+});
+
+test('pay that landed before the schedule on show still counts toward an old balance', () => {
+  // with last year's holiday pay recorded, the schedule on show starts in January
+  const p = C.payCalc(pay({ hpaHistory: { 2026: 500 } }), '2027-04-10');
+  assert.equal(p.rows[0].payday, '2027-01-15');
+  assert.ok(p.allRows.some(r => r.payday === '2026-12-18' && r.warm), 'the pay days worked out for the tax are still there');
+  const fl = C.runway({ ...bills(), balance: 100, balanceOn: '2026-12-01' }, p, OPT, '2027-04-10');
+  assert.deepEqual(fl.carriedPays.map(r => r.payday), ['2026-12-18', '2027-01-15', '2027-02-12', '2027-03-12', '2027-04-09']);
+  assert.equal(fl.carriedIn, C.r2(fl.carriedPays.reduce((a, r) => a + r.net, 0)));
+  // the spending log sees that pay day too, instead of calling the pay unexplained money
+  const sp = C.spendLog({ buffer: 0, debts: [], bills: [{ name: 'Rent', amount: 700, dueDay: 8, started: '2024-01' }],
+    balanceLog: [{ on: '2026-12-01', balance: 1000, adj: 0 }, { on: '2026-12-30', balance: 2500, adj: 0 }] }, p, OPT, '2027-04-10');
+  assert.equal(sp.windows[0].hasPay, true);
+  assert.equal(sp.windows[0].spent, C.r2(1000 - 700 + sp.windows[0].pay - 2500));
+});
+
+test('a balance reading that is not a day, or has not happened yet, is left out', () => {
+  const p = C.payCalc(pay(), '2026-09-02');
+  const good = [{ on: '2026-08-01', balance: 2000, adj: 0 }, { on: '2026-08-20', balance: 1100, adj: 0 }];
+  const clean = C.spendLog(spendMoney(good), p, OPT, '2026-09-02');
+  const t0 = Date.now();
+  const odd = C.spendLog(spendMoney([...good, { on: '9999-12-31', balance: 50, adj: 0 }, { on: '2026-13-45', balance: 1, adj: 0 },
+    { on: '2026-09-03', balance: 5, adj: 0 }, { on: 20260801, balance: 5, adj: 0 }]), p, OPT, '2026-09-02');
+  assert.ok(Date.now() - t0 < 3000, 'a reading dated the year 9999 used to walk eight thousand years of bills');
+  assert.deepEqual(odd.windows, clean.windows);
+});
+
+test('a window of thousands of years costs a moment, not the screen', () => {
+  const t0 = Date.now();
+  assert.ok(C.billDates({ dueDay: 1 }, '2026-01-01', '9999-12-31', EXACT).length <= 1500);
+  const m = { bills: [{ name: 'Card', dueDay: 5, started: '2020-01', link: 'Short-term' }, { name: 'Rent', amount: 700, dueDay: 8 }],
+    debts: [{ type: 'Short-term', balance: 5000, repayment: 10, apr: 0.02, balanceOn: '2026-09-01' }] };
+  const ev = C.billEvents(m, '2026-09-02', '9999-12-31', EXACT);
+  assert.ok(ev.length > 1500 && ev.length <= 3000);
+  assert.ok(Date.now() - t0 < 3000);
+  // a real window is untouched by the cap: thirty years of a monthly bill is 360 payments
+  assert.equal(C.billDates({ dueDay: 31 }, '2026-01-01', '2055-12-31', EXACT).length, 360);
+});
+
+test('a linked bill stepped through its dates is the bill worked out one date at a time', () => {
+  const m = { bills: [{ name: 'Cards', dueDay: 28, started: '2020-01', link: 'Short-term', skip: [2] },
+    { name: 'Mortgage', dueDay: 1, started: '2020-01', link: 'Long-term' }],
+    debts: [{ type: 'Short-term', balance: 900, repayment: 250, apr: 0.219, balanceOn: '2026-09-10' },
+      { type: 'Short-term', balance: 2400, repayment: 120, apr: 0, balanceOn: '2026-11-02' },      // typed part-way through the window
+      { type: 'Short-term', balance: 300, repayment: 0, apr: 0.3, balanceOn: '2026-09-10' },       // nothing being paid
+      { type: 'Long-term', balance: 180000, repayment: 958.12, apr: 0.0439, balanceOn: '2026-08-15' }] };
+  const all = C.billEvents(m, '2026-09-01', '2028-12-31', OPT);
+  // each payment again, asked for on its own day: the carry from the statement, afresh every time
+  all.forEach(e => assert.deepEqual(C.billEvents(m, e.date, e.date, OPT).filter(x => x.name === e.name), [e], e.name + ' ' + e.date));
+  const cards = all.filter(e => e.name === 'Cards');
+  assert.ok(cards.some(e => e.amount === 370) && cards.some(e => e.amount === 120), 'both cards, then the one left');
+  assert.ok(cards.some(e => e.amount > 120 && e.amount < 370 && e.amount !== 250), 'the last part-payment of the first card');
+  assert.ok(cards[cards.length - 1].date < '2028-12-01', 'and nothing once both are clear');
+});
+
+test('a bill or a category can be called anything, even a word JavaScript keeps for itself', () => {
+  const hist = C.priceHistory([{ name: 'constructor', amount: 10, started: '2024-01', ended: '2025-01' }, { name: 'constructor', amount: 12, started: '2025-02' },
+    { name: '__proto__', amount: 5, started: '2024-01', ended: '2025-06' }, { name: '__proto__', amount: 6, started: '2025-07' }], '2026-11-13');
+  assert.deepEqual(hist.map(h => [h.name, h.current]).sort(), [['__proto__', 6], ['constructor', 12]]);
+  const m = C.moneyCalc({ bills: [{ name: 'A', category: 'constructor', amount: 10, dueDay: 1, started: '2024-01' },
+    { name: 'B', category: '__proto__', amount: 5, dueDay: 2, started: '2024-01' }, { name: 'C', category: 'Housing', amount: 100, dueDay: 3, started: '2024-01' }] }, '2026-11-13');
+  assert.deepEqual({ ...m.byCat }, { constructor: 10, Housing: 100, ['__proto__']: 5 });
+  assert.equal(m.activeTotal, 115);
+});
+
+test('National Insurance is a whole number of pence each pay day, rounded the way HMRC rounds it', () => {
+  // 8% of (3,159.10 - 968) is 175.288: the third decimal is 8, so up
+  const up = C.payCalc(pay(), '2026-09-09').rows.find(r => r.payday === '2026-09-25');
+  assert.deepEqual([up.taxable, up.ni], [3159.1, 175.29]);
+  // 3p less taxable makes it 175.2856: the third decimal is 5, which HMRC takes down, not up
+  const down = C.payCalc(pay({ fixed: [{ name: 'x', amount: 0.03, treatment: 'Sacrifice' }] }), '2026-09-09').rows.find(r => r.payday === '2026-09-25');
+  assert.deepEqual([down.taxable, down.ni], [3159.07, 175.28]);
+  // so every pay day is pounds and pence, and the year's totals are the pay days added up
+  const p = C.payCalc(dec({ hours: { '2026-07-03': { ot: 11.5, sun: 7 }, '2026-08-28': { ot: 3, sun: 12.5 } } }), '2026-11-13');
+  const pence = x => Math.abs(x * 100 - Math.round(x * 100)) < 1e-6;
+  p.allRows.forEach(r => assert.ok(pence(r.ni) && pence(r.net) && pence(r.paye) && pence(r.projected), r.payday));
+  const yr = p.allRows.filter(r => r.taxYear === '2026-04-06'), add = k => C.r2(yr.reduce((a, r) => a + r[k], 0));
+  assert.deepEqual([C.r2(p.totals.ni), C.r2(p.totals.net), C.r2(p.totals.paye)], [add('ni'), add('net'), add('paye')]);
+  assert.equal(C.r2(p.totals.taxable - p.totals.paye - p.totals.ni - yr.reduce((a, r) => a + r.after, 0)), C.r2(p.totals.net), 'and they add across as well as down');
+});
+
+test('a figure that is not a number counts as nought, whatever it says', () => {
+  assert.deepEqual(['Infinity', '-Infinity', '1e999', 'abc', {}, null, undefined, '', NaN, Infinity].map(C.num), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(['12.5', 12.5, '-3', 0, '1e3'].map(C.num), [12.5, 12.5, -3, 0, 1000]);
+  // one such figure in a restored file used to stop every screen that touches pay
+  const p = C.payCalc(pay({ periodEndDays: '1e999', hours: { '2026-09-25': { ot: 'Infinity', sun: 4 } } }), '2026-09-09');
+  const r = p.rows.find(x => x.payday === '2026-09-25');
+  assert.deepEqual([r.ot, r.sun, r.end], [0, 4, '2026-09-25']);
+});
+
+test('a date is a real day in a year somebody could mean', () => {
+  assert.deepEqual(['2026-02-28', '1900-01-01', '2199-12-31', '1985-07-13'].map(C.isDate), [true, true, true, true]);
+  assert.deepEqual(['2026-02-31', '2026-13-01', '0002-08-08', '1899-12-31', '2200-01-01', '9999-12-31', '20266-08-08', '2026-8-8', 20260808, null].map(C.isDate),
+    [false, false, false, false, false, false, false, false, false, false]);
+  assert.deepEqual(['2026-01', '1900-01', '2199-12'].map(C.isMonth), [true, true, true]);
+  assert.deepEqual(['2026-13', '2026-00', '0002-08', '1899-12', '2200-01', '9999-12', '2026-1', null].map(C.isMonth), [false, false, false, false, false, false, false, false]);
+});

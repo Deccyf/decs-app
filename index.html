@@ -558,7 +558,8 @@ body.locked header,body.locked main,body.locked .tabs{display:none}
 /* ===== calc: pure functions, no DOM ===== */
 const C = (() => {
   const r2 = x => Math.round((x + Number.EPSILON) * 100) / 100;
-  const num = v => (v === null || v === undefined || v === '' || isNaN(+v)) ? 0 : +v;
+  // a figure, or nought for anything that is not one — "Infinity" in a restored file included
+  const num = v => (v === null || v === undefined || v === '' || !isFinite(+v)) ? 0 : +v;
   const i2d = s => new Date(s + 'T00:00:00Z');
   const d2i = d => d.toISOString().slice(0, 10);
   const dim = (y, m) => new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
@@ -651,9 +652,14 @@ const C = (() => {
     addRate: 0.45, niPT: 12570, niUEL: 50270, niMain: 0.08, niUpper: 0.02 };
   // the 6 April a day's tax year started on
   const aprilStart = day => { const y = +day.slice(0, 4); return day >= `${y}-04-06` ? `${y}-04-06` : `${y - 1}-04-06`; };
-  // a real day: 2026-02-31 would otherwise quietly become 3 March, and 2026-13-01 throws
-  const isDate = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(i2d(s)) && d2i(i2d(s)) === s;
-  const isMonth = s => typeof s === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(s);
+  /* A real day: 2026-02-31 would otherwise quietly become 3 March, and
+     2026-13-01 throws. And one in a year somebody could mean — a date box will
+     hand over the year 0002 or 9999, and the date sums are not sound out
+     there: a day after the end of 9999 cannot be written, and years before
+     100 come back as nineteen-something. */
+  const isDate = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && s >= '1900-01-01' && s <= '2199-12-31'
+    && !isNaN(i2d(s)) && d2i(i2d(s)) === s;
+  const isMonth = s => typeof s === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(s) && s >= '1900-01' && s <= '2199-12';
   function payCalc(p, tod) {
     tod = tod || today();
     const t = p.tax || {};
@@ -742,6 +748,12 @@ const C = (() => {
       const PT = Math.ceil(num(e.niPT) / 52) * 4, UEL = Math.ceil(num(e.niUEL) / 52) * 4;
       return num(e.niMain) * Math.min(Math.max(x - PT, 0), UEL - PT) + num(e.niUpper) * Math.max(x - UEL, 0);
     };
+    /* What is actually taken is a whole number of pence. HMRC's rule for NI
+       looks only at the third decimal place: 5 or less goes down, 6 or more
+       goes up, so £67.5558 is £67.55 and £67.5568 is £67.56 — not quite the
+       nearest penny. Left as a fraction, the year's total drifted a penny or
+       two from the pay days it was the sum of. */
+    const niPence = x => { const t = Math.floor(x * 1e4 + 1e-6); return (Math.floor(t / 100) + (Math.floor(t / 10) % 10 >= 6 ? 1 : 0)) / 100; };
     const nowRates = ratesOn(tod);
     const paye = x => taxOn(x, 4, nowRates);
     const ni = x => niOn(x, nowRates);
@@ -863,10 +875,11 @@ const C = (() => {
         marginal = due - taxOn(r2(cum - extraGross), wk, e);
         paid = due;
       }
-      const nic = niOn(taxable, e);
+      const niRaw = niOn(taxable, e), nic = niPence(niRaw);
       Object.assign(r, { extraGross, taxable, paye: tax, ni: nic,
-        net: taxable - tax - nic - r.after,
-        extra: extraGross ? extraGross - marginal - (nic - niOn(taxable - extraGross, e)) : 0 });
+        net: r2(taxable - tax - nic - r.after),
+        // what the extra hours are worth is a rate, so it is worked from the unrounded figures
+        extra: extraGross ? extraGross - marginal - (niRaw - niOn(taxable - extraGross, e)) : 0 });
       r.keep = extraGross ? r.extra / extraGross : null;
       /* A payslip beats a projection. The breakdown above stays exactly as it
          was worked out, because that is what explains the figure, but once the
@@ -874,7 +887,7 @@ const C = (() => {
          payslip lands a few days early, so this works for a pay day that has
          not happened yet as readily as one that has. */
       const typed = (p.actual || {})[r.payday];
-      r.projected = r.net;                             // kept unrounded, exactly as net has always been
+      r.projected = r.net;                             // to the penny, like the payslip it is compared with
       r.actual = typed === null || typed === undefined || typed === '' ? null : r2(num(typed));
       if (r.actual !== null) r.net = r.actual;
       r.diff = r.actual === null ? null : r2(r.actual - r.projected);
@@ -915,7 +928,10 @@ const C = (() => {
     const paCheck = { taxable: totals.taxable, allowance: paNow, should: r2(paShould),
       stale: totals.taxable > 100000 && paNow > paShould };
     let nextIdx = shown.findIndex(r => r.next); if (nextIdx < 0) nextIdx = Math.max(shown.findIndex(r => !r.past), 0);
-    return { basic, hourly, london, allow, sacr, after, rows: shown, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
+    /* allRows keeps the pay days worked out only to get the tax right. They are
+       not shown, but they happened: a balance typed before the schedule on show
+       begins still has their pay carried into it. */
+    return { basic, hourly, london, allow, sacr, after, rows: shown, allRows: rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
       payslipLead: lead, needsPayslip, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
@@ -993,7 +1009,7 @@ const C = (() => {
          last of them leaves, so the clear date lands in the right month — not a
          month late when the payment day is later in the month than today, nor
          when the last one is moved off a weekend or skips a month. */
-      if (payoff && payoff.months && !payoff.never && payoff.months <= 1200) {
+      if (payoff && payoff.months) {
         const dates = payDates(d, m, payoff.months, tod, opt);
         if (dates.length === payoff.months) payoff.date = dates[dates.length - 1];
       }
@@ -1035,7 +1051,7 @@ const C = (() => {
     const yearTotal = r2(active.reduce((a, b) => a + b.yearly, 0));
     const anySkips = active.some(b => b.paidMonths < 12);
     const dated = active.filter(b => num(b.dueDay) >= 1);
-    const byCat = {}; active.forEach(b => { byCat[b.category || 'Other'] = (byCat[b.category || 'Other'] || 0) + b.amt; });
+    const byCat = Object.create(null); active.forEach(b => { byCat[b.category || 'Other'] = (byCat[b.category || 'Other'] || 0) + b.amt; });
     const months = (m.months || []).map(x => {
       const has = x.earnings !== null && x.earnings !== undefined && x.earnings !== '';
       const out = has ? bills.filter(b => (b.started || '0000-00') <= x.month && (!b.ended || b.ended >= x.month)
@@ -1094,7 +1110,7 @@ const C = (() => {
     const bill = fundingBill(d, m, tod);
     const dates = bill
       ? billDates(bill, addDays(on, 1), tod, opt || { shift: 'exact', bankHols: false })
-      : (() => { const a = []; for (let i = 1; i <= 240; i++) { const x = addMonths(on, i); if (x > tod) break; a.push({ date: x }); } return a; })();
+      : (() => { const a = []; for (let i = 1; i <= SPAN_MAX; i++) { const x = addMonths(on, i); if (x > tod) break; a.push({ date: x }); } return a; })();
     const r = num(d.apr) / 12;
     let bal = typed;
     dates.forEach(() => {
@@ -1112,32 +1128,47 @@ const C = (() => {
     out.cleared = out.balance === 0 && out.carried;
     return out;
   }
+  /* How many payments clear it, counted the way debtNow carries it — a month's
+     interest to the penny, then the payment — so the count and the carry cannot
+     disagree. Dividing one figure by the other said 13 for £1,199.88 at £99.99
+     a month, which is 12 to the penny, and the closed formula drifted a payment
+     out on long, small repayments. Past a hundred years it is not clearing. */
+  const PAYOFF_MAX = 1200;
   function debtPayoff(d, tod) {
-    const B = num(d.balance), P = num(d.repayment);
+    const B = r2(num(d.balance)), P = num(d.repayment);
     if (!(B > 0) || !(P > 0)) return null;
-    if (!d.apr) return { months: Math.ceil(B / P), date: addMonths(tod, Math.ceil(B / P)), naive: true };
-    const r = num(d.apr) / 12; const k = 1 - r * B / P;
-    if (k <= 0) return { never: true };
-    const n = Math.ceil(-Math.log(k) / Math.log(1 + r));
-    return { months: n, date: addMonths(tod, n), naive: false };
+    const r = num(d.apr) / 12;
+    let bal = B, n = 0;
+    while (bal > 0) {
+      const int = r2(bal * r);
+      if (int >= P || n >= PAYOFF_MAX) return { never: true };
+      bal = r2(bal + int - Math.min(P, r2(bal + int)));
+      n++;
+    }
+    return { months: n, date: addMonths(tod, n), naive: !d.apr };
   }
 
   /* ---------- bill dates & cash flow ----------
      A monthly bill leaves on the same day every month. Day 29–31 falls back to the
      last day of a short month, which is what banks do. The shift option then moves
      anything landing on a weekend or bank holiday. */
+  /* The longest stretch of months anything here is worked over. A mortgage is
+     a few hundred; this is past any real schedule. It is not there to trim one
+     — it is so a date that is nonsense (a reading dated the year 9999, from a
+     damaged backup or a phone clock gone wrong) costs a moment instead of
+     walking eight thousand years of months and freezing the screen. */
+  const SPAN_MAX = 1500;
   function billDates(b, from, to, opt) {
     const day = Math.round(num(b.dueDay));
     if (!(day >= 1) || from > to) return [];
     opt = opt || { shift: 'exact', bankHols: false };
-    // a month either side of the window, since a moved date can cross into it; walked as numbers,
-    // with no cap — a mortgage's 25 years of payments used to stop counting after 80 months
+    // a month either side of the window, since a moved date can cross into it; walked as numbers
     const started = isMonth(b.started) ? b.started : '0000-00', ended = isMonth(b.ended) ? b.ended : null;
     const skip = b.skip || [], out = [];
     let y = +from.slice(0, 4), mo = +from.slice(5, 7) - 2;
     if (mo < 0) { mo += 12; y--; }
     const endY = +to.slice(0, 4) + (to.slice(5, 7) === '12' ? 1 : 0), endMo = +to.slice(5, 7) % 12;
-    for (; y < endY || (y === endY && mo <= endMo); mo === 11 ? (mo = 0, y++) : mo++) {
+    for (let walked = 0; (y < endY || (y === endY && mo <= endMo)) && walked < SPAN_MAX; walked++, mo === 11 ? (mo = 0, y++) : mo++) {
       const mk = `${y}-${String(mo + 1).padStart(2, '0')}`;
       // council tax over ten instalments, a gym frozen for the winter: months off
       if (started > mk || (ended && ended < mk) || skip.includes(mo + 1)) continue;
@@ -1146,6 +1177,34 @@ const C = (() => {
     }
     return out;
   }
+  /* What a linked bill takes on each of its dates. A debt is carried once, to
+     the day before the first of them, and then stepped from payment to payment
+     — the same sum billAmount does for a single day, done once rather than
+     afresh from the statement for every date. Only when this bill is the one
+     the debt is carried on from the first date to the last; otherwise each
+     date is worked on its own, as it always was. */
+  function linkedAmounts(b, dates, debts, m, opt) {
+    const sums = dates.map(() => 0);
+    if (!dates.length) return sums;
+    const first = addDays(dates[0].date, -1), last = addDays(dates[dates.length - 1].date, -1);
+    debts.forEach(d => {
+      if (debtType(d) !== b.link) return;
+      const pay = num(d.repayment);
+      const stepped = pay && d.balanceOn && fundingBill(d, m, first) === b && fundingBill(d, m, last) === b;
+      if (!stepped) { dates.forEach((x, i) => { sums[i] += debtDue(d, m, x.date, opt); }); return; }
+      const r = num(d.apr) / 12;
+      let bal = null;
+      dates.forEach((x, i) => {
+        if (x.date <= d.balanceOn) { sums[i] += pay; return; }      // before the statement: the full repayment, as debtDue has it
+        if (bal === null) bal = debtNow(d, m, addDays(x.date, -1), opt).balance;
+        if (bal <= 0) return;
+        const int = r2(bal * r), took = Math.min(pay, r2(bal + int));
+        sums[i] += took;
+        bal = Math.max(0, r2(bal + int - took));
+      });
+    });
+    return sums.map(r2);
+  }
   /* Every bill payment falling in a window, oldest first. */
   function billEvents(m, from, to, opt) {
     const debts = m.debts || [];
@@ -1153,10 +1212,12 @@ const C = (() => {
     (m.bills || []).forEach(b => {
       const fixed = b.link ? null : num(b.amount);        // a linked bill is worked out per payment
       if (fixed === 0) return;
-      billDates(b, from, to, opt).forEach(d => {
-        const amount = fixed === null ? billAmount(b, debts, d.date, m, opt) : fixed;
+      const dates = billDates(b, from, to, opt);
+      const amounts = fixed === null ? linkedAmounts(b, dates, debts, m, opt) : null;
+      dates.forEach((d, i) => {
+        const amount = amounts ? amounts[i] : fixed;
         if (amount) out.push({ date: d.date, nominal: d.nominal, moved: d.moved, why: d.why,
-          name: b.name || 'Bill', category: b.category || 'Other', amount });
+          name: String(b.name || 'Bill'), category: b.category || 'Other', amount });
       });
     });
     return out.sort((a, b) => a.date.localeCompare(b.date) || b.amount - a.amount || a.name.localeCompare(b.name));
@@ -1195,7 +1256,7 @@ const C = (() => {
        The one pay day never carried is the one still being shown as coming:
        payCalc rolls past today, so the two can only meet if a caller hands in a
        schedule of its own, and then the pay row wins. */
-    const carriedPays = typedOn ? p.rows.filter(r => r.payday > typedOn && r.payday <= tod && r.payday < to) : [];
+    const carriedPays = typedOn ? (p.allRows || p.rows).filter(r => r.payday > typedOn && r.payday <= tod && r.payday < to) : [];
     const carriedIn = r2(carriedPays.reduce((a, r) => a + num(r.net), 0));
     /* Money the app itself has moved since the balance was typed — the card
        cleared with Pay now. It rides on top of the typed figure rather than
@@ -1312,15 +1373,16 @@ const C = (() => {
      back together by name to see what a bill has actually done over time. */
   function priceHistory(bills, tod) {
     const thisKey = mkey(tod || today());
-    const byName = {};
+    const byName = new Map();                      // a Map, so a bill called "constructor" is just a name
     (bills || []).forEach(b => {
       if (b.link) return;                          // linked bills track the debts, not a price
       const k = String(b.name || '').trim().toLowerCase();
       if (!k || !b.started) return;
-      (byName[k] = byName[k] || []).push(b);
+      if (!byName.has(k)) byName.set(k, []);
+      byName.get(k).push(b);
     });
     const out = [];
-    Object.values(byName).forEach(list => {
+    byName.forEach(list => {
       if (list.length < 2) return;
       const rows = list.slice().sort((a, b) => String(a.started).localeCompare(String(b.started)));
       const changes = [];
@@ -1350,10 +1412,11 @@ const C = (() => {
   function spendLog(m, p, opt, tod) {
     tod = tod || today();
     const has = v => v !== null && v !== undefined && v !== '';
+    // a reading is a real day, and not one that has yet to come (a phone clock set wrong when it was typed)
     const log = (m.balanceLog || [])
-      .filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on) && has(x.balance))
+      .filter(x => x && isDate(x.on) && x.on <= tod && has(x.balance))
       .slice().sort((a, b) => a.on.localeCompare(b.on));
-    const windows = [];
+    const windows = [], pays = (p && (p.allRows || p.rows)) || [];
     // every bill across the whole log at once, then dealt into the windows in order:
     // a full log used to work the bill dates out afresh for each of 119 windows
     const span = log.length > 1 ? billEvents(m, addDays(log[0].on, 1), log[log.length - 1].on, opt) : [];
@@ -1365,7 +1428,7 @@ const C = (() => {
       let sum = 0;
       for (let j = ei; j < span.length && span[j].date <= b.on; j++) sum += span[j].amount;
       const bills = r2(sum);
-      const pay = r2(((p && p.rows) || []).filter(r => r.payday > a.on && r.payday <= b.on)
+      const pay = r2(pays.filter(r => r.payday > a.on && r.payday <= b.on)
         .reduce((s, r) => s + num(r.net), 0));
       const adj = num(b.adj);
       const expected = r2(num(a.balance) - bills + pay + adj);
@@ -1376,7 +1439,7 @@ const C = (() => {
          into the window after it — one stretch then looks like a spree and the
          next like a windfall. Neither is worth averaging. */
         balance: r2(num(b.balance)), spent, perDay: r2(spent / days),
-        hasPay: ((p && p.rows) || []).some(r => r.payday >= a.on && r.payday <= b.on) });
+        hasPay: pays.some(r => r.payday >= a.on && r.payday <= b.on) });
     }
     /* A window with a pay day in it is not evidence of anything: the pay used
        here is this app's estimate, so any few pounds it has the payslip wrong
@@ -1595,6 +1658,16 @@ function normalize() {
   ['bills', 'months', 'debts'].forEach(k => { arr(m, k); m[k] = m[k].filter(isObj); });
   // a month is YYYY-MM; a whole date is cut to its month, and anything else is dropped rather than left to throw
   const monthOf = v => C.isMonth(v) ? v : C.isDate(v) ? v.slice(0, 7) : null;
+  /* A restored file is somebody else's typing. Words that are not words and
+     days that are not days are put right here, once, rather than left for a
+     screen to trip over: one bad value should not stop the app drawing. A
+     blank stays blank; only something that cannot be read is dropped. */
+  const blankish = v => v === null || v === undefined || v === '';
+  const text = (o, ...ks) => ks.forEach(k => { const v = o[k];
+    if (!blankish(v) && typeof v !== 'string') o[k] = typeof v === 'number' && isFinite(v) ? String(v) : ''; });
+  const day = (o, ...ks) => ks.forEach(k => { if (!blankish(o[k]) && !C.isDate(o[k])) o[k] = null; });
+  // the buttons find a row by its id as text, so an id is text: a number is written out, anything else is made afresh
+  const ident = x => { if (typeof x.id === 'number' && isFinite(x.id)) x.id = String(x.id); else if (typeof x.id !== 'string' || !x.id) x.id = uid(); };
   /* Savings used to be several pots, each holding its own money. It is really
      one balance with a shopping list against it, so the old pots are added up
      into that balance and each becomes a thing being saved for. Runs once: an
@@ -1617,30 +1690,36 @@ function normalize() {
   if (!Array.isArray(sv.goals)) sv.goals = [];
   sv.goals = sv.goals.filter(g => g && typeof g === 'object');
   sv.goals.forEach(g => {
-    if (!g.id) g.id = uid();
+    ident(g);
     if (g.cost === undefined) g.cost = null;
     if (g.got === undefined) g.got = null;
     if (g.paid === undefined) g.paid = null;
+    text(g, 'name'); day(g, 'got');
   });
   if (m.buffer === undefined) m.buffer = 0;
   if (m.overdraft === undefined) m.overdraft = 0;
   if (m.amex === undefined) m.amex = null;
   if (typeof m.amexBefore !== 'boolean') m.amexBefore = false;
   if (typeof m.netLongTerm !== 'boolean') m.netLongTerm = false;
-  if (m.amexUndo === undefined) m.amexUndo = null;
+  // an undo for Pay now is the card figure, the adjustment and the day; anything else is not one
+  if (!isObj(m.amexUndo) || !C.isDate(m.amexUndo.at)) m.amexUndo = null;
   m.balanceAdj = C.r2(C.num(m.balanceAdj));
   if (!Array.isArray(m.balanceLog)) m.balanceLog = [];
-  m.balanceLog = m.balanceLog.filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.on)).slice(-LOG_MAX);
-  if (S.backupOn === undefined) S.backupOn = null;
+  m.balanceLog = m.balanceLog.filter(x => isObj(x) && C.isDate(x.on)).slice(-LOG_MAX);
+  if (!C.isDate(S.backupOn)) S.backupOn = null;
   if (m.balance === undefined) m.balance = null;
-  if (m.balanceOn === undefined) m.balanceOn = null;
+  if (!C.isDate(m.balanceOn)) m.balanceOn = null;
   // a balance carried over from before this feature has no date — treat it as true today
   if (m.balance !== null && m.balance !== undefined && m.balance !== '' && !m.balanceOn) m.balanceOn = C.today();
   if (m.dueShift !== 'exact' && m.dueShift !== 'prev' && m.dueShift !== 'next') m.dueShift = 'next';
   if (typeof m.bankHols !== 'boolean') m.bankHols = true;
   m.bills.forEach(b => {
-    if (!b.id) b.id = uid();
-    if (b.dueDay === undefined) b.dueDay = null;
+    ident(b);
+    text(b, 'name', 'category');
+    if (!b.category) b.category = 'Other';             // what every total already counted it as
+    // a whole day from 1 to 31, which is how the sums have always read it (45 was the last day of the month)
+    const dd = Math.round(C.num(b.dueDay));
+    b.dueDay = dd >= 1 ? Math.min(dd, 31) : null;
     b.started = monthOf(b.started); b.ended = monthOf(b.ended);
     if (b.link !== 'Short-term' && b.link !== 'Long-term') b.link = null;
     const rv = Math.round(C.num(b.review));
@@ -1650,14 +1729,15 @@ function normalize() {
     b.skip = [...new Set(b.skip.map(x => Math.round(C.num(x))).filter(x => x >= 1 && x <= 12))].sort((x, y) => x - y);
   });
   m.debts.forEach(d => {
-    if (!d.id) d.id = uid();
+    ident(d);
     if (d.type !== 'Long-term') d.type = 'Short-term';
     /* The same rule as the bank balance: a figure from before dates were kept is
        taken as true today, so the repayments start coming off it from now
        rather than never. Without this, a debt entered earlier would sit still. */
+    if (!C.isDate(d.balanceOn)) d.balanceOn = null;      // not a day at all: the same as never having had one
     if (!d.balanceOn && d.balance !== null && d.balance !== undefined && d.balance !== '') d.balanceOn = C.today();
-    if (!C.isDate(d.balanceOn)) d.balanceOn = null;
-    if (!/^\d{4}-\d{2}$/.test(d.rateEnds || '')) d.rateEnds = null;
+    if (!C.isMonth(d.rateEnds)) d.rateEnds = null;
+    text(d, 'name', 'notes');
   });
   m.months = m.months.filter(x => C.isMonth(x.month));
   /* A restored backup can carry months out of order, or the same month twice.
@@ -1688,6 +1768,13 @@ function normalize() {
   // a tax year with no real start date is never in force, and "Add next tax year" would build NaN-04-06 from it
   P.taxYears = P.taxYears.filter(y => C.isDate(y.from));
   ['hours', 'hpaHistory', 'tax', 'actual'].forEach(k => obj(P, k));
+  P.fixed.forEach(f => { text(f, 'name'); day(f, 'from', 'to');
+    if (!['Allowance', 'Sacrifice', 'After-tax'].includes(f.treatment)) f.treatment = 'After-tax'; });   // how the sums already took it
+  P.rises.forEach(r => day(r, 'from', 'arrearsOn'));
+  // a pay day's hours are a pair of figures; anything else there cannot be added to
+  Object.keys(P.hours).forEach(k => { if (!isObj(P.hours[k])) delete P.hours[k]; });
+  // holiday pay is kept by the calendar year it was earned in
+  Object.keys(P.hpaHistory).forEach(k => { if (!/^\d{4}$/.test(k)) delete P.hpaHistory[k]; });
   if (!C.isDate(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
   if (P.payslipLead === undefined || P.payslipLead === null || P.payslipLead === '') P.payslipLead = 4;
@@ -1705,9 +1792,12 @@ function normalize() {
   P.taxYears.sort((a, b) => String(a.from).localeCompare(String(b.from)));
   if (Array.isArray(S.goals)) S.goals = S.goals.join('\n');
   if (typeof S.goals !== 'string') S.goals = '';
-  ['house', 'games'].forEach(k => S[k].forEach(x => { if (!x.id) x.id = uid(); }));
-  S.games.forEach(g => { if (!C.isDate(g.date)) g.date = null; if (typeof g.game !== 'string') g.game = String(g.game ?? ''); });
-  S.house.forEach(j => { if (!['To do', 'In progress', 'Done'].includes(j.status)) j.status = 'To do'; });
+  ['house', 'games'].forEach(k => S[k].forEach(ident));
+  S.games.forEach(g => { if (!C.isDate(g.date)) g.date = null; text(g, 'game', 'notes'); if (blankish(g.game)) g.game = ''; });
+  S.house.forEach(j => { if (!['To do', 'In progress', 'Done'].includes(j.status)) j.status = 'To do'; text(j, 'job', 'notes'); day(j, 'dateDone'); });
+  S.classic.forEach(c => text(c, 'set', 'no', 'card', 'grade'));
+  S.mega.forEach(c => text(c, 'no', 'card', 'grade'));
+  S.psm.forEach(p => { text(p, 'titles'); if (!blankish(p.released) && !C.isMonth(p.released)) p.released = null; });
 }
 function setPath(o, p, v) {
   const ks = p.split('.'); const last = ks.pop();
@@ -1970,7 +2060,7 @@ const field = (label, inner) => {
   return `<div class="field"><label${id ? ` for="${id}"` : ''}>${esc(label)}</label>${tied}</div>`;
 };
 const inp = (path, val, type = 'number', extra = '') => {
-  const v = val === null || val === undefined ? '' : val;
+  const v = val === null || val === undefined || typeof val === 'object' ? '' : val;      // nothing readable is an empty box
   const attrs = type === 'number' ? 'type="number" inputmode="decimal" step="any"' : `type="${type}"`;
   return `<input ${attrs} data-set="${esc(path)}" value="${esc(v)}" ${extra}>`;
 };
@@ -1984,7 +2074,13 @@ const signedInp = (path, val, extra = '') => {
     <button type="button" class="sgn${neg ? ' on' : ''}" data-act="sign" aria-label="Make this ${neg ? 'positive' : 'negative'}">${neg ? '−' : '+'}</button></div>`;
 };
 const pctInp = (path, val) => `<input type="number" inputmode="decimal" step="any" data-set="${esc(path)}" data-kind="pct" value="${val == null ? '' : +(val * 100).toFixed(4)}">`;
-const sel = (path, val, opts) => `<select data-set="${esc(path)}">${opts.map(o => `<option${o === val ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+/* A stored value that is not one of the choices — a category from an older
+   list, say — is added as a choice of its own. Left out, the box showed the
+   first option instead, which is not what was stored. */
+const sel = (path, val, opts) => {
+  const all = val !== null && val !== undefined && val !== '' && !opts.includes(val) ? [val, ...opts] : opts;
+  return `<select data-set="${esc(path)}">${all.map(o => `<option${o === val ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+};
 const bar = (p, cls = '') => `<div class="bar ${cls}"><i style="width:${Math.max(0, Math.min(100, Math.round((p || 0) * 100)))}%"></i></div>`;
 const detailsBlock = (key, title, inner) => `<details data-key="${key}"${ui.open[key] ? ' open' : ''}><summary>${esc(title)}</summary>${inner}</details>`;
 const segment = (act, val, opts) => `<div class="seg" role="group">${opts.map(o =>
@@ -2205,7 +2301,6 @@ const VIEWS = {
   money() {
     const opt = flowOpt(), m = C.moneyCalc(S.money, null, opt), p = payCalcNow();
     const fl = C.runway(S.money, p, opt);
-    const flows = C.periodFlows(S.money, p, opt, ui.flowPeriods);
     const cur = m.thisMonthKey;
     // the last twelve months and next month; the rest are one tap away
     const nextKey = C.addMonths(cur + '-01', 1).slice(0, 7), yearAgo = C.addMonths(cur + '-01', -11).slice(0, 7);
@@ -2213,6 +2308,8 @@ const VIEWS = {
     const hiddenMonths = m.months.length - months.length;
 
     const sec = MONEY_SECTIONS.some(x => x.v === ui.moneyTab) ? ui.moneyTab : 'now';
+    // the pay-period table is only on the first section, so only that one works it out
+    const flows = sec === 'now' ? C.periodFlows(S.money, p, opt, ui.flowPeriods) : [];
     let h = moneySwitcher(sec);
     if (sec === 'now') {
     /* --- 1. cash flow to the next pay day --- */
@@ -2290,8 +2387,8 @@ const VIEWS = {
     h += `<div class="card"><h2>Disposable by pay period<span class="hint">from bill dates</span></h2>
       <div class="muted small">You're paid every 28 days but bills come out monthly, so some periods carry two of the same bill and some carry none. This counts what actually leaves inside each period.</div>
       <div class="mt10">${flows.map(f => {
-        const dupes = {}; f.events.forEach(e => { dupes[e.name] = (dupes[e.name] || 0) + 1; });
-        const twice = Object.keys(dupes).filter(k => dupes[k] > 1);
+        const dupes = new Map(); f.events.forEach(e => dupes.set(e.name, (dupes.get(e.name) || 0) + 1));
+        const twice = [...dupes.keys()].filter(k => dupes.get(k) > 1);
         const share = f.net > 0 ? Math.min(f.outgoings / f.net, 1) : 0;
         return `<div class="perrow"><div><b>${esc(C.fmtDM(f.from))} – ${esc(C.fmtDM(f.to))}</b>
             <small class="meta">${C.gbp(f.net, 0)} in · ${C.gbp(f.outgoings, 0)} out · ${f.events.length} bills${twice.length ? ' · twice: ' + esc(twice.join(', ')) : ''}</small></div>
@@ -2505,16 +2602,19 @@ function goalRow(g, actions) {
           : C.gbp(g.short) + ' short'
             + (g.by ? ' · there by ' + esc(C.fmtM(C.mkey(g.by))) : g.stalled ? ' · nothing going in' : ''))
         : 'no price on it yet'}</small></div>
-    <div class="num tr"><b>${C.gbp(g.cost)}</b>${g.pct !== null ? `<div class="muted small">${C.pct(g.pct)}</div>` : ''}</div>
+    <div class="num tr"><b>${g.cost ? C.gbp(g.cost) : '—'}</b>${g.pct !== null ? `<div class="muted small">${C.pct(g.pct)}</div>` : ''}</div>
     ${g.pct !== null ? `<div class="pb">${bar(g.pct, g.covered ? '' : 'teal')}</div>` : ''}
     ${actions === true ? `<div class="potact">
       <button class="btn ${g.covered ? 'teal' : 'ghost'} sm" data-act="goalGot" data-id="${esc(g.id)}">Got it</button></div>` : ''}</div>`;
 }
-/* Something already bought, and what actually came out of the pot for it. */
+/* Something already bought, and what actually came out of the pot for it.
+   With nothing typed for what was paid, that is its listed price — the figure
+   the total above the list counts, so the row and the total agree. */
 function gotRow(g) {
+  const paid = g.paidSet ? g.paid : g.cost;
   return `<div class="row"><div class="l"><b>${esc(g.name || 'Something')}</b>
-      <small>got ${esc(C.fmtD(g.got))}${g.paid && g.cost && C.r2(g.paid) !== C.r2(g.cost) ? ' · listed at ' + C.gbp(g.cost, 0) : ''}</small></div>
-    <div class="num tr">${C.gbp(g.paid)}</div><button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div>`;
+      <small>got ${esc(C.fmtD(g.got))}${g.paidSet && g.cost && C.r2(g.paid) !== C.r2(g.cost) ? ' · listed at ' + C.gbp(g.cost, 0) : ''}</small></div>
+    <div class="num tr">${C.gbp(paid)}</div><button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div>`;
 }
 /* ---- the Pay tab, in pieces ---- */
 const resRow = (l, v, cls = '') => `<div class="r ${cls}"><span>${esc(l)}</span><span class="num">${v}</span></div>`;
@@ -2563,7 +2663,7 @@ function payBoard(p, idx, r) {
 }
 function hpaCard(p) {
   return `<div class="card"><h2>EU Holiday Pay</h2><div class="muted small mb4">Southeastern's Holiday Pay Adjustment: 4/52 of a calendar year's overtime and Sunday pay, paid on the first pay day in March of the next year. Taxed and NI'd like normal pay.</div>
-    ${p.hpa.filter(y => y.received != null || y.qualifying > 0 || y.year === C.today().slice(0, 4)).map(y => `<div class="row"><div class="l"><b>${esc(y.year)}</b><small>${y.received != null ? 'received ' + (y.payday ? esc(C.fmtD(y.payday)) : '') : (y.qualifying != null ? C.gbp(y.qualifying) + ' qualifying · ' + y.logged + ' of ' + y.periods + ' periods with hours · due ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : '')}</small></div>
+    ${p.hpa.filter(y => y.received != null || y.qualifying > 0 || y.year === C.today().slice(0, 4)).map(y => `<div class="row"><div class="l"><b>${esc(y.year)}</b><small>${y.received != null ? 'received ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : (y.qualifying != null ? C.gbp(y.qualifying) + ' qualifying · ' + y.logged + ' of ' + y.periods + ' periods with hours · due ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : '')}</small></div>
       <div class="num tr"><b>${C.gbp(y.gross)}</b>${y.gross ? `<div class="muted small">≈ ${C.gbp(y.net, 0)} after tax</div>` : ''}</div></div>`).join('') || '<div class="empty">Log some hours and the estimate appears here.</div>'}
     <div class="note">What counts: overtime, rest day working, Sunday working/premiums, night and higher-grade payments. Basic pay and London Allowance don't. The estimate only covers periods with hours logged here.</div></div>`;
 }
@@ -3049,11 +3149,45 @@ function fieldLabel(el) {
   const txt = (l && l.textContent || el.getAttribute('aria-label') || '').trim();
   return txt ? `changing ${txt}` : 'the last edit';
 }
+/* A date typed on a keyboard fires change at every digit that leaves a whole
+   date behind it — 0002, then 0020, then 0202 on the way to 2026 — and each
+   one redrew the page, which put the caret back at the start of the box: on a
+   computer a date could not be typed past its first part, and the year 0002
+   was saved on the way. While keys are going into a date or month box its
+   change waits for the box to be left, or for Enter. A date picked from a
+   calendar has no keys behind it, so it still lands at once, as on a phone. */
+let dateKeys = null, dateWaiting = null;
+const isDateBox = el => !!el && el.tagName === 'INPUT' && (el.type === 'date' || el.type === 'month');
+const dateSettle = el => { dateKeys = dateWaiting = null; el.dispatchEvent(new Event('change', { bubbles: true })); };
+document.addEventListener('keydown', e => {
+  const el = e.target;
+  if (!isDateBox(el) || e.key === 'Tab') return;
+  if (e.key === 'Enter') { if (dateWaiting === el) dateSettle(el); return; }
+  dateKeys = el;
+}, true);
+document.addEventListener('pointerdown', e => { if (dateKeys === e.target && dateWaiting !== e.target) dateKeys = null; }, true);
+document.addEventListener('focusout', e => {
+  const el = e.target;
+  if (dateKeys !== el && dateWaiting !== el) return;
+  // the caret stepping from the day to the month is a blur and a focus as well, so look once it has settled
+  setTimeout(() => {
+    if (document.activeElement === el) return;
+    if (dateWaiting === el) dateSettle(el); else if (dateKeys === el) dateKeys = null;
+  }, 0);
+}, true);
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'importFile') { if (el.files[0]) importBackup(el.files[0]); el.value = ''; return; }
-  if (el.dataset.hours) { const hv = C.num(el.value); if (!isFinite(hv)) { toast("That isn't a number — left as it was"); render(); return; }
-    const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {}; h[el.dataset.hours] = Math.max(0, C.r2(hv)); if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday]; commit('the hours'); return; }
+  if (isDateBox(el) && dateKeys === el) { dateWaiting = el; return; }      // still being typed: see above
+  if (el.dataset.hours) {
+    // a lone "-" or "1e" reads as an empty box: that is not the same as clearing it, and must not wipe the hours
+    const hv = parseInput(el);
+    if (hv === undefined) { toast("That isn't a number — left as it was"); render(); return; }
+    const h = S.pay.hours[el.dataset.payday] = S.pay.hours[el.dataset.payday] || {};
+    h[el.dataset.hours] = Math.max(0, C.r2(hv || 0));
+    if (!h.ot && !h.sun) delete S.pay.hours[el.dataset.payday];
+    commit('the hours'); return;
+  }
   /* A pay rise typed as a percentage: worked into the new salary and London
      weighting from the figures in force before it, which is what is stored. */
   if (el.dataset.risePct !== undefined) {
@@ -3068,23 +3202,31 @@ document.addEventListener('change', e => {
     commit('the pay rise');
     return;
   }
-  const val = el.dataset.set ? parseInput(el) : null;
+  let val = el.dataset.set ? parseInput(el) : null;
   // a figure the keyboard could not make sense of, or a date that must be there, is refused rather than wiped
   if (el.dataset.set && (val === undefined || (val === null && el.required))) {
     toast(val === undefined ? "That isn't a number — left as it was" : 'That needs a date — left as it was'); render(); return;
   }
+  // a date box will take the year 0002, or 20266: whole dates, but not ones any sum here can be worked from
+  if (val !== null && el.dataset.set && ((el.type === 'date' && !C.isDate(val)) || (el.type === 'month' && !C.isMonth(val)))) {
+    toast("That date is out of range — left as it was"); render(); return;
+  }
+  // the day a bill leaves is a whole day of the month: 45 is kept as the 31st, which is how the dates treat it anyway
+  if (val !== null && /^money\.bills\.\d+\.dueDay$/.test(el.dataset.set || '')) val = Math.round(val) >= 1 ? Math.min(Math.round(val), 31) : null;
   const amt = el.dataset.set && el.dataset.set.match(/^money\.bills\.(\d+)\.amount$/);
   if (amt) { billAmountChanged(+amt[1], val); return; }
   if (el.dataset.set) {
     /* New terms apply from today. Without this, typing the new rate when a fix
        ends re-ran the whole carry since the statement at that rate, and moved
        a mortgage by thousands for months already paid at the old one. A blank
-       APR is different: that was never a rate, just a missing one, so filling
-       it in reworks the carry from the statement, which is the honest figure. */
+       APR being filled in is different: that was never a rate, just a missing
+       one, so it reworks the carry from the statement, which is the honest
+       figure. A new repayment is new terms either way: the months already
+       paid went out at the old amount, rate or no rate. */
     const dt = el.dataset.set.match(/^money\.debts\.(\d+)\.(apr|repayment)$/);
     const dtd = dt && S.money.debts[+dt[1]];
     if (dtd) { const now = C.debtNow(dtd, S.money, C.today(), flowOpt());
-      if (now.carried && !now.noRate) { dtd.balance = now.balance; dtd.balanceOn = C.today(); } }
+      if (now.carried && !(dt[2] === 'apr' && now.noRate)) { dtd.balance = now.balance; dtd.balanceOn = C.today(); } }
     setPath(S, el.dataset.set, val);
     if (el.dataset.set === 'money.balance') balanceTyped();        // stamped, so a stale figure is obvious
     if (el.dataset.set === 'money.amex') S.money.amexUndo = null;
@@ -3136,7 +3278,10 @@ let hiddenAt = 0;
    nothing — as far as the phone gives the page time to do it — and nor does
    the moment before the lock screen comes back. */
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); if (pinIsSet()) document.body.classList.add('veiled'); return; }
+  if (document.hidden) {
+    if (dateWaiting) dateSettle(dateWaiting);            // a date typed but not yet left: take it before the app goes away
+    hiddenAt = Date.now(); if (pinIsSet()) document.body.classList.add('veiled'); return;
+  }
   // away long enough with a PIN set: reload so the lock screen comes back
   if (pinIsSet() && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) { location.reload(); return; }
   document.body.classList.remove('veiled');

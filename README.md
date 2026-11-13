@@ -46,7 +46,10 @@ can be tested without a browser.
 **Pay.** `payCalc` works a 4-weekly payroll: cumulative PAYE against the tax
 week, NI per period from thresholds derived the way HMRC derives them (weekly,
 rounded up, multiplied), overtime and Sunday premium, salary sacrifice and
-allowances, pay rises with backpay, and Southeastern's EU holiday pay. Rates
+allowances, pay rises with backpay, and Southeastern's EU holiday pay. NI is
+taken to the penny each pay day by HMRC's rule, which looks only at the third
+decimal place (5 or less goes down, 6 or more up), so every pay day is pounds
+and pence and the year's totals are exactly the pay days added up. Rates
 live in `pay.taxYears`, one entry per year, so April is a data change rather
 than a code change. The personal allowance is whatever the tax code says, as
 the code's number × 10 + 9 — 12,579 for 1257L, which is what HMRC's own tables
@@ -95,6 +98,8 @@ due since coming off it. Pay day counts as gone rather than still to come, since
 BACS lands in the small hours: `payCalc` rolls past today and `runway` carries
 today's pay in, so the money is there from midnight rather than the next
 morning. The one pay day never carried is the one still being shown as coming.
+Pay is carried from `allRows`, which keeps the pay days worked out only to get
+the tax right, so a balance typed before the schedule on show still gets its pay.
 Bills landing on a weekend or bank holiday can shift to the next or previous
 working day (`shiftDue`, with Easter worked out rather than tabulated). An
 overdraft counts as spendable room; a buffer does not.
@@ -122,7 +127,12 @@ which is what makes the price history real, and a known final month carries over
 to the new price. A bill can link to a debt type instead of carrying its own
 amount (`billAmount` / `debtDue`): it then pays each debt of that type only while
 the debt still owes something, so a card's repayment stops when the card
-clears, the last payment being only what was left.
+clears, the last payment being only what was left. Over a run of dates
+`linkedAmounts` carries each debt once and steps it from payment to payment,
+which comes to the same pennies as working every date afresh from the statement
+and is several times quicker. Nothing is worked over more than `SPAN_MAX`
+months (125 years): past any real schedule, and there so a nonsense date costs
+a moment rather than freezing the screen.
 
 **Debts.** A balance is read off a statement and carried forward by `debtNow`:
 the repayments due since come off it and interest goes back on at a twelfth of
@@ -131,12 +141,15 @@ the day the typed figure was true and the typed figure is never rewritten, so
 retyping from the next statement restarts the projection. A debt with a balance
 but no date is taken as true today on load, the same rule as the bank balance,
 so nothing entered before dates were kept sits still for ever. The expected
-clear date counts the payments with `debtPayoff` and takes the last of them off
+clear date counts the payments with `debtPayoff` — month by month, interest to
+the penny and then the payment, exactly as `debtNow` carries it, so the count
+and the carry cannot disagree, and anything over a hundred years reads as not
+clearing — and takes the last of them off
 the real schedule (`payDates`): the funding bill's dates, moved off weekends and
 missing its months off, or monthly from the statement where no bill pays it.
 Changing the rate or the repayment carries the balance to today on the old terms
-first, so the new ones only apply from now — except a blank APR, which was never
-a rate, so filling it in reworks the carry honestly from the statement. One
+first, so the new ones only apply from now — except a blank APR being filled in,
+which was never a rate, so it reworks the carry honestly from the statement. One
 thing still to know: retyping a balance moves the anchor, so a card that
 cleared before its new statement is taken as having paid on the dates in
 between. A dated history of terms would fix that; it is on the list. A blank APR is treated
@@ -155,6 +168,7 @@ is appended to `money.balanceLog`, and `spendLog` takes each pair of readings,
 works out what the bills and pay should have done in between, and calls the
 remainder spending. Stretches touching a pay day are shown but kept out of the
 average, because the pay in them is this app's estimate rather than a payslip.
+A reading that is not a real day, or is dated after today, is left out.
 
 ## What it nudges about
 
@@ -215,9 +229,23 @@ boundary so a half-finished backup cannot white-screen the app. A redraw waits
 for a pressed mouse button to come up, so the click that blurred a field still
 lands. `normalize()` fills in anything a restored file is missing, drops list
 entries that are not objects and months or dates that are not real, and is
-where old data shapes are migrated. A restore is shaped on a copy and only put
+where old data shapes are migrated. It also puts right what a damaged or
+hand-edited file can carry: words that are not text, ids that are not text
+(the buttons find a row by its id), a bill day outside 1 to 31, a category or
+treatment that is blank. A date is only a date in a year somebody could mean
+(`isDate` and `isMonth` take 1900 to 2199), and a figure that is not a number
+counts as nought. A restore is shaped on a copy and only put
 in place once that works, so a bad file changes nothing. `payCalcNow()` keeps
 the pay schedule between redraws until the pay settings or the date change.
+
+**Typing is checked where it lands.** A number box the keyboard could not make
+sense of — a lone minus sign — is refused rather than read as empty, hours
+included. A date typed on a computer keyboard is taken when the box is left or
+Enter is pressed, not at each digit: the browser reports a whole date at every
+keystroke (the year 0002, then 0020, on the way to 2026) and redrawing on each
+put the caret back at the start. A date picked from a calendar has no keys
+behind it and lands at once, as on a phone. A choice box whose stored value is
+not on its list shows that value rather than the first option.
 
 **Storage is read even when it cannot be written**, so a phone out of space
 still shows its figures; a failed save is said once and every later save still

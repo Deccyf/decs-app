@@ -28,9 +28,17 @@ run — a lot of them assert exact pounds and pence. The browser tests do it by
 replacing `window.Date` before the page loads, and each one asserts that the
 page logged no console or uncaught errors.
 
-The last section of each file holds the regressions from the full review: each
-test there reproduces a bug that was found and fixed, so a failure in one means
-that bug is back.
+The last sections of each file hold the regressions from the two full reviews:
+each test there reproduces a bug that was found and fixed, so a failure in one
+means that bug is back.
+
+Two things the browser tests have to know about how a browser behaves. Filling
+a box and then dispatching `change` gives the page two change events, the
+second from the browser itself when the redraw takes focus away; that is
+harmless for a plain edit, but a test of something that depends on the order of
+edits should type and Tab the way a person does. And a date box reports a whole
+date at every digit typed, which is why dates typed by keyboard are tested key
+by key.
 
 Two habits worth keeping when adding tests here. Seed the fixture with the
 shape the app stores rather than a raw object, since `normalize()` fills in

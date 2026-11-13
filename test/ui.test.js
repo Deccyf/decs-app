@@ -1983,3 +1983,197 @@ test('a pay rise can be typed as a percentage, or as the salary, and each shows 
   r = (await stored(page)).pay.rises[0];
   assert.equal(r.london, 185.24, 'typing the salary leaves the London weighting as it was');
 });
+
+/* ----------------------------------------------- found in the second review -- */
+test('a slip of the keyboard in an hours box does not wipe the hours', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.hours = { '2026-09-25': { ot: 12, sun: 8 } };
+  const page = await open(t, { data, tab: 'pay' });
+  const box = 'input[data-hours="ot"][data-payday="2026-09-25"]';
+  for (const slip of ['-', '1e', '.']) {
+    await page.click(box); await page.keyboard.press('Control+a'); await page.keyboard.type(slip);
+    await page.keyboard.press('Tab'); await page.waitForTimeout(350);
+    assert.deepEqual((await stored(page)).pay.hours['2026-09-25'], { ot: 12, sun: 8 }, JSON.stringify(slip));
+    assert.match(await page.$eval('#toast', e => e.textContent), /isn't a number/);
+    assert.equal(await page.$eval(box, e => e.value), '12', 'and the box goes back to what it was');
+  }
+  // emptying the box on purpose is still how hours are taken off
+  await page.click(box); await page.keyboard.press('Control+a'); await page.keyboard.press('Backspace');
+  await page.keyboard.press('Tab'); await page.waitForTimeout(350);
+  assert.deepEqual((await stored(page)).pay.hours['2026-09-25'], { ot: 0, sun: 8 });
+});
+
+test('a new repayment starts from today, with or without a rate on the debt', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.debts = [{ id: 'd1', name: 'Sofa', type: 'Short-term', balance: 1500, repayment: 100, apr: null, balanceOn: '2026-03-09' }];
+  const page = await open(t, { data, tab: 'money', sec: 'saving' });
+  await page.click('[data-act="toggle"][data-key="editDebts"]'); await page.waitForTimeout(250);
+  // six payments of £100 have gone since March: £900 owed today
+  await page.fill('[data-set="money.debts.0.repayment"]', '200');
+  await page.dispatchEvent('[data-set="money.debts.0.repayment"]', 'change'); await page.waitForTimeout(350);
+  let d = (await stored(page)).money.debts[0];
+  assert.deepEqual([d.balance, d.balanceOn, d.repayment], [900, '2026-09-09', 200], 'not £1,500 less six payments of the new £200');
+  // filling in a rate that was never there still reworks the months since the statement
+  const again = JSON.parse(JSON.stringify(data));
+  const page2 = await open(t, { data: again, tab: 'money', sec: 'saving' });
+  await page2.click('[data-act="toggle"][data-key="editDebts"]'); await page2.waitForTimeout(250);
+  // typed and tabbed out of, the way it is by hand: one change, where fill-and-dispatch makes two
+  await page2.click('[data-set="money.debts.0.apr"]'); await page2.keyboard.type('10');
+  await page2.keyboard.press('Tab'); await page2.waitForTimeout(350);
+  d = (await stored(page2)).money.debts[0];
+  assert.deepEqual([d.balance, d.balanceOn, d.apr], [1500, '2026-03-09', 0.1]);
+});
+
+test('what was got shows the figure the total counts, and a thing with no price shows none', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.savings = { balance: 2000, monthly: 100, goals: [
+    { id: 'a', name: 'Bike', cost: 500, got: '2026-09-01', paid: null },
+    { id: 'b', name: 'Gift', cost: 80, got: '2026-08-01', paid: 0 },
+    { id: 'c', name: 'Someday', cost: null, got: null, paid: null }] };
+  const page = await open(t, { data, tab: 'money', sec: 'saving' });
+  await page.click('details[data-key="gotlist"] summary'); await page.waitForTimeout(200);
+  const rows = await page.$$eval('details[data-key="gotlist"] .row', es => es.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  assert.match(await page.$eval('details[data-key="gotlist"] summary', e => e.textContent), /Already got \(2\) · £500/);
+  assert.match(rows[0], /Bike got 1.Sep.2026 £500\.00/, 'no figure typed for what was paid: the listed price, as the total has it');
+  assert.match(rows[1], /Gift got 1.Aug.2026 · listed at £80 £0\.00/, 'nought is a figure: it cost nothing');
+  const someday = await page.$$eval('#view .prow', es => es.map(e => e.textContent.replace(/\s+/g, ' ').trim()).find(x => x.startsWith('Someday')));
+  assert.match(someday, /no price on it yet —/);
+  assert.doesNotMatch(someday, /£0\.00/);
+});
+
+test('an old year of holiday pay says when it came', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.hpaHistory = { 2024: 480, 2025: 529 };
+  const page = await open(t, { data, tab: 'pay' });
+  const card = await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' ')).find(x => x.includes('EU Holiday Pay') && x.includes('4/52')));
+  assert.match(card, /2024received March 2025/, 'its pay day is before the schedule, but the month is known');
+  assert.match(card, /2025received 13.Mar.2026/);
+});
+
+test('a category that is not on the list is shown as itself, not as the first one', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills[2].category = 'Entertainment';
+  const page = await open(t, { data, tab: 'money', sec: 'bills' });
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  const box = '[data-set="money.bills.2.category"]';
+  assert.equal(await page.$eval(box, e => e.value), 'Entertainment');
+  assert.equal(await page.$eval('[data-set="money.bills.0.category"]', e => e.options.length), 9, 'a category on the list gets no extra choice');
+  await page.selectOption(box, 'Other'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).money.bills[2].category, 'Other');
+  assert.equal(await page.$eval(box, e => e.options.length), 9, 'and the old one is gone once it is changed');
+});
+
+test('the day a bill leaves is kept as a day of the month', skip, async t => {
+  const page = await open(t, { tab: 'money', sec: 'bills' });
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  const box = '[data-set="money.bills.0.dueDay"]';
+  for (const [typed, kept] of [['45', 31], ['14.6', 15], ['0', null]]) {
+    await page.fill(box, typed); await page.dispatchEvent(box, 'change'); await page.waitForTimeout(350);
+    assert.equal((await stored(page)).money.bills[0].dueDay, kept, typed);
+  }
+});
+
+test('a damaged backup is put right on the way in, and every screen still draws', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(data, { backupOn: { a: 1 } });
+  Object.assign(data.money, { balanceOn: '2026-13-45', amexUndo: { amex: 5, at: 'last week' },
+    balanceLog: [{ on: '2026-09-01', balance: 900, adj: 0 }, { on: '2026-02-31', balance: 1, adj: 0 }, 'x', { on: 20260901, balance: 2 }],
+    savings: { balance: 100, monthly: 'Infinity', goals: [{ id: 7, name: { a: 1 }, cost: 50, got: 12345, paid: null }] } });
+  data.money.bills[0].name = { a: 1 };
+  Object.assign(data.money.bills[1], { category: 12, dueDay: '45', id: { a: 1 } });
+  data.money.bills[2].category = '';
+  data.money.months[1].saved = 'Infinity';
+  Object.assign(data.money.debts[0], { name: ['x'], rateEnds: '2026-1-1' });
+  Object.assign(data.pay, { periodEndDays: '1e999', hours: { '2026-09-25': 'lots', '2026-08-28': { ot: 'Infinity', sun: 4 } },
+    hpaHistory: { soon: 100, 2025: 529 },
+    fixed: [{ name: 5, amount: 20, treatment: {}, from: 'abc', to: '' }],
+    rises: [{ from: {}, salary: 50000, london: null, arrearsOn: '2026-99-99' }] });
+  data.house = [{ id: 3, job: { a: 1 }, status: 'Done', dateDone: 'yesterday', notes: 7 }];
+  data.classic = [{ set: true, no: 4, card: { a: 1 }, have: true, grade: [] }];
+  data.psm = [{ issue: 1, titles: 9, released: 12345, mag: true, demo: false, demoNo: 1 }];
+  data.games = [{ id: 7, game: 64, date: '2026-08-14', notes: {} }];
+  const page = await open(t, { data });
+  const bad = /NaN|undefined|\[object|Infinity|∞|Something broke/;
+  for (const tab of ['home', 'pay', 'money', 'lists', 'games']) {
+    await page.click(`.tabs button[data-tab="${tab}"]`); await page.waitForTimeout(150);
+    for (const sec of tab === 'money' ? ['now', 'bills', 'saving', 'history'] : [null]) {
+      if (sec) { await page.click(`[data-act="moneyTab"][data-v="${sec}"]`); await page.waitForTimeout(150); }
+      const text = await page.$eval('#hdr', e => e.textContent) + await page.$eval('#view', e => e.textContent);
+      assert.doesNotMatch(text, bad, `${tab}${sec ? '/' + sec : ''}`);
+    }
+  }
+  await page.click('#settingsBtn'); await page.waitForTimeout(200);
+  assert.doesNotMatch(await page.$eval('#view', e => e.textContent), bad, 'settings');
+  // one edit, so what was put right is written back and can be looked at
+  await page.click('.tabs button[data-tab="games"]'); await page.waitForTimeout(150);
+  await page.click('[data-act="delGame"]'); await page.waitForTimeout(200);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);
+  const s = await stored(page);
+  assert.equal(s.games.length, 0, 'a row whose id was a number can be removed');
+  assert.equal(s.backupOn, null);
+  assert.deepEqual([s.money.balanceOn, s.money.amexUndo], ['2026-09-09', null], 'a balance with no real date is taken as true today');
+  assert.deepEqual(s.money.balanceLog.map(x => x.on), ['2026-09-01']);
+  assert.deepEqual(s.money.bills.map(b => [b.name, b.category, b.dueDay]), [['', 'Housing', 1], ['Council Tax', '12', 31], ['Energy', 'Other', 20]]);
+  assert.ok(s.money.bills.every(b => typeof b.id === 'string' && b.id));
+  assert.deepEqual([s.money.debts[0].name, s.money.debts[0].rateEnds], ['', null]);
+  assert.deepEqual(s.money.savings.goals.map(g => [g.id, g.name, g.got]), [['7', '', null]]);
+  assert.deepEqual(Object.keys(s.pay.hours), ['2026-08-28']);
+  assert.deepEqual(Object.keys(s.pay.hpaHistory), ['2025']);
+  assert.deepEqual(s.pay.fixed.map(f => [f.name, f.treatment, f.from]), [['5', 'After-tax', null]]);
+  assert.deepEqual([s.pay.rises[0].from, s.pay.rises[0].arrearsOn], [null, null]);
+  assert.deepEqual(s.house.map(j => [j.id, j.job, j.dateDone, j.notes]), [['3', '', null, '7']]);
+  assert.deepEqual(s.classic.map(c => [c.set, c.no, c.card, c.grade]), [['', '4', '', '']]);
+  assert.deepEqual(s.psm.map(p => [p.titles, p.released]), [['9', null]]);
+});
+
+test('a bill called after a word JavaScript keeps for itself works like any other', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills = [
+    { id: '1', name: 'constructor', category: 'Other', amount: 30, dueDay: 10, started: '2024-01', ended: '2026-08' },
+    { id: '2', name: 'constructor', category: 'Other', amount: 45, dueDay: 12, started: '2026-09' },
+    { id: '3', name: '__proto__', category: 'Other', amount: 5, dueDay: 12, started: '2024-01' },
+    { id: '4', name: '__proto__', category: 'Other', amount: 6, dueDay: 14, started: '2024-01' }];
+  const page = await open(t, { data, tab: 'money' });
+  const periods = await page.$$eval('#view .perrow', es => es.map(e => e.textContent.replace(/\s+/g, ' ')));
+  assert.ok(periods.some(x => /twice: __proto__/.test(x)), 'two payments under one name in a period are still pointed out');
+  await page.click('[data-act="moneyTab"][data-v="bills"]'); await page.waitForTimeout(250);
+  assert.match(await page.$eval('#view', e => e.textContent.replace(/\s+/g, ' ')), /constructor.*£30.*£45|£30\.00 → £45\.00/);
+});
+
+test('a date typed on a keyboard is taken once the box is left, not at every digit', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.debts[0].balanceOn = '2026-09-01';
+  data.money.savings = { balance: 100, monthly: null, goals: [{ id: 'a', name: 'Bike', cost: 500, got: null, paid: null }] };
+  const page = await open(t, { data, tab: 'money', sec: 'saving' });
+  await page.click('[data-act="toggle"][data-key="editDebts"]'); await page.waitForTimeout(250);
+  const box = '[data-set="money.debts.0.balanceOn"]', on = async () => (await stored(page)).money.debts[0].balanceOn;
+  // 8 August reads the same day-first or month-first, so this does not care how the browser lays a date out
+  const type = async digits => { await page.focus(box); for (const k of digits) { await page.keyboard.type(k); await page.waitForTimeout(60); } };
+  await type('08082026');
+  assert.equal(await page.$eval(box, e => e.value), '2026-08-08', 'every digit went where it was typed');
+  assert.equal(await on(), '2026-09-01', 'and nothing was saved on the way: not the year 0002, then 0020, then 0202');
+  await page.click('[data-set="money.debts.0.name"]'); await page.waitForTimeout(350);
+  assert.equal(await on(), '2026-08-08', 'leaving the box takes it');
+  // Enter takes it without leaving
+  await type('07072026'); await page.keyboard.press('Enter'); await page.waitForTimeout(350);
+  assert.equal(await on(), '2026-07-07');
+  // a year nothing here can be worked from is refused, and the box goes back
+  for (const year of ['0002', '9999', '20266']) {
+    await type('0606' + year);
+    await page.click('[data-set="money.debts.0.name"]'); await page.waitForTimeout(350);
+    assert.equal(await on(), '2026-07-07', year);
+    assert.match(await page.$eval('#toast', e => e.textContent), /out of range/);
+    assert.equal(await page.$eval(box, e => e.value), '2026-07-07');
+  }
+  // a date picked rather than typed has no keys behind it, and still lands at once
+  await page.$eval(box, e => { e.value = '2026-05-05'; e.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.waitForTimeout(350);
+  assert.equal(await on(), '2026-05-05');
+  // an empty box: nothing until it is whole and left
+  await page.click('[data-act="toggle"][data-key="editGoals"]'); await page.waitForTimeout(250);
+  const got = '[data-set="money.savings.goals.0.got"]';
+  await page.focus(got); for (const k of '04042026') { await page.keyboard.type(k); await page.waitForTimeout(60); }
+  assert.equal((await stored(page)).money.savings.goals[0].got, null);
+  await page.click('[data-set="money.savings.goals.0.name"]'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).money.savings.goals[0].got, '2026-04-04');
+});

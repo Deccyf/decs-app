@@ -51,16 +51,19 @@ function goalRow(g, actions) {
           : C.gbp(g.short) + ' short'
             + (g.by ? ' · there by ' + esc(C.fmtM(C.mkey(g.by))) : g.stalled ? ' · nothing going in' : ''))
         : 'no price on it yet'}</small></div>
-    <div class="num tr"><b>${C.gbp(g.cost)}</b>${g.pct !== null ? `<div class="muted small">${C.pct(g.pct)}</div>` : ''}</div>
+    <div class="num tr"><b>${g.cost ? C.gbp(g.cost) : '—'}</b>${g.pct !== null ? `<div class="muted small">${C.pct(g.pct)}</div>` : ''}</div>
     ${g.pct !== null ? `<div class="pb">${bar(g.pct, g.covered ? '' : 'teal')}</div>` : ''}
     ${actions === true ? `<div class="potact">
       <button class="btn ${g.covered ? 'teal' : 'ghost'} sm" data-act="goalGot" data-id="${esc(g.id)}">Got it</button></div>` : ''}</div>`;
 }
-/* Something already bought, and what actually came out of the pot for it. */
+/* Something already bought, and what actually came out of the pot for it.
+   With nothing typed for what was paid, that is its listed price — the figure
+   the total above the list counts, so the row and the total agree. */
 function gotRow(g) {
+  const paid = g.paidSet ? g.paid : g.cost;
   return `<div class="row"><div class="l"><b>${esc(g.name || 'Something')}</b>
-      <small>got ${esc(C.fmtD(g.got))}${g.paid && g.cost && C.r2(g.paid) !== C.r2(g.cost) ? ' · listed at ' + C.gbp(g.cost, 0) : ''}</small></div>
-    <div class="num tr">${C.gbp(g.paid)}</div><button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div>`;
+      <small>got ${esc(C.fmtD(g.got))}${g.paidSet && g.cost && C.r2(g.paid) !== C.r2(g.cost) ? ' · listed at ' + C.gbp(g.cost, 0) : ''}</small></div>
+    <div class="num tr">${C.gbp(paid)}</div><button class="del" data-act="delGoal" data-id="${esc(g.id)}" aria-label="Remove ${esc(g.name || 'this')}">×</button></div>`;
 }
 /* ---- the Pay tab, in pieces ---- */
 const resRow = (l, v, cls = '') => `<div class="r ${cls}"><span>${esc(l)}</span><span class="num">${v}</span></div>`;
@@ -109,7 +112,7 @@ function payBoard(p, idx, r) {
 }
 function hpaCard(p) {
   return `<div class="card"><h2>EU Holiday Pay</h2><div class="muted small mb4">Southeastern's Holiday Pay Adjustment: 4/52 of a calendar year's overtime and Sunday pay, paid on the first pay day in March of the next year. Taxed and NI'd like normal pay.</div>
-    ${p.hpa.filter(y => y.received != null || y.qualifying > 0 || y.year === C.today().slice(0, 4)).map(y => `<div class="row"><div class="l"><b>${esc(y.year)}</b><small>${y.received != null ? 'received ' + (y.payday ? esc(C.fmtD(y.payday)) : '') : (y.qualifying != null ? C.gbp(y.qualifying) + ' qualifying · ' + y.logged + ' of ' + y.periods + ' periods with hours · due ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : '')}</small></div>
+    ${p.hpa.filter(y => y.received != null || y.qualifying > 0 || y.year === C.today().slice(0, 4)).map(y => `<div class="row"><div class="l"><b>${esc(y.year)}</b><small>${y.received != null ? 'received ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : (y.qualifying != null ? C.gbp(y.qualifying) + ' qualifying · ' + y.logged + ' of ' + y.periods + ' periods with hours · due ' + (y.payday ? esc(C.fmtD(y.payday)) : 'March ' + (+y.year + 1)) : '')}</small></div>
       <div class="num tr"><b>${C.gbp(y.gross)}</b>${y.gross ? `<div class="muted small">≈ ${C.gbp(y.net, 0)} after tax</div>` : ''}</div></div>`).join('') || '<div class="empty">Log some hours and the estimate appears here.</div>'}
     <div class="note">What counts: overtime, rest day working, Sunday working/premiums, night and higher-grade payments. Basic pay and London Allowance don't. The estimate only covers periods with hours logged here.</div></div>`;
 }
