@@ -192,6 +192,27 @@ document.addEventListener('click', async e => {
     ui.game = { name: '', date: null, notes: '' }; commit(`adding ${n}`); toast('Added to log'); return; }
   if (a === 'delGame') { const g = S.games.find(x => x.id === d.id);
     if (await confirmDlg('Remove from the log?', esc(g ? g.game : ''))) { S.games = S.games.filter(x => x.id !== d.id); removed(g ? g.game : 'a game'); } return; }
+  /* A payment that left the bank before the day it was expected. Ticking it
+     says the balance typed already has it, so it is dated the day that balance
+     was read (today, if there is none): on or before the reading, it is not
+     carried off again, and it is out of what is still to leave. Kept by the
+     month the payment was due in, so next month's is untouched. */
+  if (a === 'billGone') {
+    const b = S.money.bills.find(x => x.id === d.id);
+    if (!b || !C.isMonth(d.mk)) return;
+    const name = b.name || 'That bill';
+    if (!isObj(b.gone)) b.gone = {};
+    if (b.gone[d.mk]) {
+      delete b.gone[d.mk]; if (!Object.keys(b.gone).length) delete b.gone;
+      commit(`putting ${name} back`); toast(`${name} is back in the list`); return;
+    }
+    const m = S.money, tod = C.today(), has = m.balance !== null && m.balance !== undefined && m.balance !== '';
+    const read = has && C.isDate(m.balanceOn) && m.balanceOn <= tod ? m.balanceOn : tod, floor = C.addDays(tod, -14);
+    b.gone[d.mk] = read < floor ? floor : read;        // a balance weeks old is no reading to hang it on
+    commit(`ticking ${name} as gone`);
+    toast(read < tod ? `${name} ticked as gone. Your balance is from ${C.fmtDM(read)}: if it left after that, type today's balance.` : `${name} ticked as gone, so it will not come off again`, UNDO);
+    return;
+  }
   /* The card comes off the balance as it stands today — bills and pay carried
      since it was typed included — rather than off the old typed figure, and
      the reading keeps its date: the app moved this money, the bank did not
@@ -421,7 +442,11 @@ async function billAmountChanged(i, next) {
   if (keep) {
     const lastMonth = b.ended || null;                 // a known final month carries over to the new price
     b.ended = C.mkey(C.addMonths(thisMonth + '-01', -1));
-    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth, skip: [...(b.skip || [])] });
+    const row = { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth, skip: [...(b.skip || [])] };
+    // a payment ticked as gone belongs to the row its month is in: this month's goes with the new price, not shared between the two
+    const went = Object.entries(b.gone || {}).filter(([k]) => k >= thisMonth);
+    if (went.length) row.gone = Object.fromEntries(went); else delete row.gone;
+    S.money.bills.splice(i + 1, 0, row);
     toast(`Old price kept until ${C.fmtM(b.ended)}`);
   } else {
     b.amount = next;

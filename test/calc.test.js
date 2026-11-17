@@ -1432,3 +1432,55 @@ test('the year to date off a payslip is where the next pay day\'s tax starts fro
   assert.equal(row(on({ '2026-08-28': { taxable: 20000, paye: null } }), '2026-09-25').paye, 438.4);
   assert.equal(row(on({ '2026-08-28': { taxable: '', paye: 2700 } }), '2026-09-25').paye, 438.4);
 });
+
+/* ----------------------------------------- a payment that left early -- */
+const early = (gone, extra) => Object.assign(bills(
+  { id: 'gym', name: 'Gym', category: 'Other', amount: 30, dueDay: 23, started: '2024-01', gone },
+  { id: 'rent', name: 'Rent', category: 'Housing', amount: 700, dueDay: 25, started: '2024-01' }), extra);
+
+test('a payment ticked as gone already sits on the day it had left by', () => {
+  const m = early({ '2026-09': '2026-09-21' });
+  const ev = C.billEvents(m, '2026-08-01', '2026-10-31', EXACT).filter(e => e.name === 'Gym');
+  assert.deepEqual(ev.map(e => e.date), ['2026-08-23', '2026-09-21', '2026-10-23'], 'that month only: the ones either side are where they were');
+  assert.deepEqual([ev[1].early, ev[1].due, ev[1].id, ev[1].mk], [true, '2026-09-23', 'gym', '2026-09']);
+  assert.deepEqual([ev[0].early, ev[0].due, ev[0].mk], [false, '2026-08-23', '2026-08']);
+  // the day it was expected is the working day the setting moves it to
+  assert.equal(C.billEvents(early({ '2026-08': '2026-08-20' }), '2026-08-01', '2026-08-31', OPT).find(e => e.name === 'Gym').due, '2026-08-24', '23 Aug 2026 is a Sunday');
+  assert.equal(C.billEvents(early({ '2026-09': 'soon' }), '2026-09-01', '2026-09-30', EXACT)[0].date, '2026-09-23', 'a date that is not one is no tick');
+});
+
+test('a bill that has gone already is not taken off the balance a second time', () => {
+  const p = C.payCalc(pay(), '2026-09-21');                       // pay day 25 Sep
+  const plain = C.runway(early(undefined, { balance: 1000, balanceOn: '2026-09-21' }), p, EXACT, '2026-09-21');
+  assert.deepEqual([plain.events.map(e => e.name), plain.outgoings, plain.safe, plain.gone.length], [['Gym'], 30, 970, 0]);
+  // ticked on the day the balance was read: out of what is still to leave, and that much more is free
+  const ticked = C.runway(early({ '2026-09': '2026-09-21' }, { balance: 1000, balanceOn: '2026-09-21' }), p, EXACT, '2026-09-21');
+  assert.deepEqual([ticked.events.length, ticked.outgoings, ticked.start, ticked.safe], [0, 0, 1000, 1000]);
+  assert.deepEqual(ticked.gone.map(e => [e.name, e.amount, e.due, e.id, e.mk]), [['Gym', 30, '2026-09-23', 'gym', '2026-09']], 'still on show, so the tick can come back off');
+  // a balance read two days ago that already had it: nothing is carried off it
+  const old = C.runway(early({ '2026-09': '2026-09-19' }, { balance: 1000, balanceOn: '2026-09-19' }), p, EXACT, '2026-09-21');
+  assert.deepEqual([old.start, old.carriedOut, old.safe], [1000, 0, 1000]);
+  // but one that left after that reading does come off the estimate, once
+  const since = C.runway(early({ '2026-09': '2026-09-20' }, { balance: 1000, balanceOn: '2026-09-19' }), p, EXACT, '2026-09-21');
+  assert.deepEqual([since.start, since.carriedOut, since.events.length, since.safe], [970, 30, 0, 970]);
+  // a bill due on pay day itself comes out of the pay; gone early, it does not
+  const onPay = C.runway(early(undefined, { balance: 1000, balanceOn: '2026-09-21' }), p, EXACT, '2026-09-21');
+  const rentGone = early(undefined, { balance: 1000, balanceOn: '2026-09-21' }); rentGone.bills[1].gone = { '2026-09': '2026-09-21' };
+  const r = C.runway(rentGone, p, EXACT, '2026-09-21');
+  assert.deepEqual([onPay.onPayOut, r.onPayOut, C.r2(r.afterPay - onPay.afterPay)], [700, 0, 700]);
+  assert.deepEqual(r.gone.map(e => e.name), ['Rent']);
+  // once the day it was expected has been, there is nothing left to show
+  assert.equal(C.runway(early({ '2026-09': '2026-09-21' }, { balance: 1000, balanceOn: '2026-09-21' }), C.payCalc(pay(), '2026-09-24'), EXACT, '2026-09-24').gone.length, 0);
+});
+
+test('a payment that left early is still counted once, where it left', () => {
+  const p = C.payCalc(pay(), '2026-09-27');
+  const m = early({ '2026-09': '2026-09-21' }, { balanceLog: [{ on: '2026-09-15', balance: 1000, adj: 0 }, { on: '2026-09-21', balance: 950, adj: 0 }, { on: '2026-09-24', balance: 940, adj: 0 }] });
+  const sp = C.spendLog(m, p, EXACT, '2026-09-27');
+  // the £30 is in the stretch it really left in, so that one's spending is £20 and the next is not short of a bill
+  assert.deepEqual(sp.windows.map(w => [w.from, w.bills, w.spent]), [['2026-09-15', 30, 20], ['2026-09-21', 0, 10]]);
+  const flat = C.spendLog(early(undefined, { balanceLog: m.balanceLog }), p, EXACT, '2026-09-27');
+  assert.deepEqual(flat.windows.map(w => [w.bills, w.spent]), [[0, 50], [30, -20]], 'where without the tick it reads as a spree and then a windfall');
+  // and across a year every payment is there exactly once
+  assert.equal(C.billEvents(m, '2026-01-01', '2026-12-31', EXACT).filter(e => e.name === 'Gym').length, 12);
+});

@@ -316,6 +316,16 @@ input,select,textarea,button{font:inherit;color:var(--ink)}
 .lrow .lv{text-align:right;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}
 .lrow .lv small{display:block;font-weight:600;color:var(--muted);font-size:11.5px}
 .lrow .lv small.neg{color:var(--bad)}
+/* the list of payments still to come has a tick down its right edge, for one that has left already */
+.ledger.ticks .lrow{grid-template-columns:52px 1fr auto 30px;column-gap:8px}
+/* a 30px ring, so the name beside it keeps its room, with the area that takes a tap reaching 8px past it all round */
+.paid{width:30px;height:30px;border-radius:50%;border:2px solid var(--line-2);background:none;color:transparent;position:relative;
+  font-size:15px;font-weight:800;line-height:1;cursor:pointer;padding:0;display:grid;place-items:center;-webkit-tap-highlight-color:transparent}
+.paid::after{content:"";position:absolute;inset:-9px}
+/* only where there is a pointer to hover with: on a phone the ring stuck to whichever row slid under the finger */
+@media (hover:hover){.paid:hover{border-color:var(--good);color:var(--line-2)}}
+.paid.on{background:var(--good);border-color:var(--good);color:var(--card)}
+.paid:focus-visible{outline:2px solid var(--focus,var(--good));outline-offset:2px}
 /* gone, so quieter — by colour rather than fading the whole row past readable */
 .lrow.gone .ln b{color:var(--ink-2);font-weight:600}.lrow.gone .lv{color:var(--muted);font-weight:600}
 .moved{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
@@ -1228,9 +1238,16 @@ const C = (() => {
       // council tax over ten instalments, a gym frozen for the winter: months off
       if (started > mk || (ended && ended < mk) || skip.includes(mo + 1)) continue;
       const s = shiftDue(`${mk}-${String(Math.min(day, dim(y, mo))).padStart(2, '0')}`, opt.shift, opt.bankHols);
-      if (s.date >= from && s.date <= to) out.push(s);
+      /* A payment ticked as gone already left before the day it was expected:
+         it sits on the day it had gone by instead, so it is still counted once
+         — in the pay period and the stretch between balances it really left in
+         — and is not taken off a balance that already has it. */
+      const went = b.gone && isDate(b.gone[mk]) ? b.gone[mk] : null;
+      const hit = went ? { date: went, nominal: s.nominal, moved: false, why: '', early: true, due: s.date } : s;
+      if (hit.date >= from && hit.date <= to) out.push(hit);
     }
-    return out;
+    // an early one can land ahead of the month before it, and the stepping below wants them in order
+    return out.some(x => x.early) ? out.sort((a, b) => a.date.localeCompare(b.date)) : out;
   }
   /* What a linked bill takes on each of its dates. A debt is carried once, to
      the day before the first of them, and then stepped from payment to payment
@@ -1271,8 +1288,10 @@ const C = (() => {
       const amounts = fixed === null ? linkedAmounts(b, dates, debts, m, opt) : null;
       dates.forEach((d, i) => {
         const amount = amounts ? amounts[i] : fixed;
+        // id and mk say which payment of which bill this is, which is what ticking one as gone needs
         if (amount) out.push({ date: d.date, nominal: d.nominal, moved: d.moved, why: d.why,
-          name: String(b.name || 'Bill'), category: b.category || 'Other', amount });
+          name: String(b.name || 'Bill'), category: b.category || 'Other', amount,
+          id: b.id, mk: d.nominal.slice(0, 7), early: !!d.early, due: d.due || d.date });
       });
     });
     return out.sort((a, b) => a.date.localeCompare(b.date) || b.amount - a.amount || a.name.localeCompare(b.name));
@@ -1289,6 +1308,9 @@ const C = (() => {
        and the period that starts that day counted it a second time. */
     const events = billEvents(m, addDays(tod, 1), addDays(to, -1), opt);
     const onPay = billEvents(m, to, to, opt);
+    /* The ones ticked as gone already that would otherwise be in the list: not
+       counted again, but shown, so the tick can be taken back off. */
+    const gone = billEvents(m, addDays(tod, -45), tod, opt).filter(e => e.early && e.due > tod && e.due <= to);
     const onPayOut = r2(onPay.reduce((a, e) => a + e.amount, 0));
     const out = events.reduce((a, e) => a + e.amount, 0);
     const hasBal = m.balance !== null && m.balance !== undefined && m.balance !== '';
@@ -1344,7 +1366,7 @@ const C = (() => {
     const overdraft = Math.abs(num(m.overdraft));
     const low = series.length ? series.reduce((a, x) => x.bal < a.bal ? x : a, series[0]) : null;
     return {
-      from: tod, to, days, events, outgoings: r2(out), start, hasBal, atPayday, buffer, series, low,
+      from: tod, to, days, events, gone, outgoings: r2(out), start, hasBal, atPayday, buffer, series, low,
       typed, typedOn, carried, carriedOut, carriedIn, carriedPays, adj, onPay, onPayOut,
       staleDays: typedOn ? daysBetween(typedOn, tod) : 0,
       wasCarried: !!typedOn && (carried.length > 0 || carriedPays.length > 0),
@@ -1776,6 +1798,15 @@ function normalize() {
     const dd = Math.round(C.num(b.dueDay));
     b.dueDay = dd >= 1 ? Math.min(dd, 31) : null;
     b.started = monthOf(b.started); b.ended = monthOf(b.ended);
+    // payments ticked as gone already: the month one was due in, against the day it had left by; old ones are let go
+    if (b.gone !== undefined) {
+      if (!isObj(b.gone)) delete b.gone;
+      else {
+        const keep = C.mkey(C.addMonths(C.today(), -13));
+        Object.keys(b.gone).forEach(k => { if (!C.isMonth(k) || !C.isDate(b.gone[k]) || k < keep) delete b.gone[k]; });
+        if (!Object.keys(b.gone).length) delete b.gone;
+      }
+    }
     if (b.link !== 'Short-term' && b.link !== 'Long-term') b.link = null;
     const rv = Math.round(C.num(b.review));
     b.review = rv >= 1 && rv <= 12 ? rv : null;
@@ -2390,7 +2421,7 @@ const VIEWS = {
         <div class="sparkwrap">${sparkline(fl.series, fl.overdraft)}</div>
         <div class="results">
           <div class="r"><span>${fl.wasCarried ? 'Estimated balance today' : 'Balance today'}</span><span class="num">${C.gbp(fl.start)}</span></div>
-          <div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
+          <div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}${fl.gone.length ? `<small>${fl.gone.length} ticked as gone already</small>` : ''}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
           ${fl.amexNow ? `<div class="r"><span>AMEX balance, taken off now</span><span class="num neg">-${C.gbp(fl.amexNow)}</span></div>` : ''}
           <div class="r"><span>Balance the morning of pay day</span><span class="num">${C.gbp(fl.atPayday)}</span></div>
           ${fl.overdraft && fl.low ? `<div class="r"><span>Overdraft left at the lowest point</span><span class="num${fl.headroom < 0 ? ' neg' : ''}">${C.gbp(fl.headroom)}</span></div>` : ''}
@@ -2435,18 +2466,21 @@ const VIEWS = {
       ${fl.paydayPassed ? `<div class="banner mt12"><b>Pay day has been since you typed this.</b> The figures above are worked forward from ${esc(C.fmtD(fl.typedOn))} — check your bank and retype it.${fl.amex ? ` Paid the card? Press <b>Pay now</b> under American Express.` : ''}</div>`
         : fl.staleDays >= 14 ? `<div class="banner mt12"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
       ${m.undated ? `<div class="banner mt12"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} in <b>Bills</b>.</div>` : ''}
-      ${fl.events.length || fl.onPay.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
+      ${fl.events.length || fl.onPay.length || fl.gone.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger ticks">${
         (() => { let bal = fl.hasBal ? C.r2(fl.start - fl.amexNow) : null;      // the card is already out if it goes before pay day
           const run = amt => bal === null ? null : (bal = C.r2(bal + amt));
           const day = `<div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>`;
           const small = v => v === null ? '' : `<small class="${v < 0 ? 'neg' : ''}">${C.gbp(v)}</small>`;
-          return fl.events.map(e => ledgerRow(e, run(-e.amount))).join('')
+          // the ones ticked as gone first, out of the running balance: the balance typed already has them
+          return fl.gone.map(e => ledgerRow(e, null, true, true)).join('')
+            + fl.events.map(e => ledgerRow(e, run(-e.amount), false, false)).join('')
             + (fl.net != null ? `<div class="lrow pay">${day}<div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(fl.to)))}</small></div>
               <div class="lv pos">+${C.gbp(fl.net)}${small(run(fl.net))}</div></div>
-              ${fl.onPay.map(e => ledgerRow(e, run(-e.amount))).join('')}
+              ${fl.onPay.map(e => ledgerRow(e, run(-e.amount), false, false)).join('')}
               ${fl.amexOnPay ? `<div class="lrow">${day}<div class="ln"><b>AMEX cleared</b><small>card balance</small></div>
                 <div class="lv">-${C.gbp(fl.amexOnPay)}${small(run(-fl.amexOnPay))}</div></div>` : ''}` : ''); })()
-      }</div>` : ''}
+      }</div>
+      <div class="note">Tick any that have already left your bank.</div>` : ''}
       <div class="sep"></div>${flowOptions()}</div>`;
 
     /* --- 1b. what the balance readings say has actually been spent --- */
@@ -2619,10 +2653,20 @@ const VIEWS = {
 const CATS = ['Housing', 'Utilities', 'Insurance', 'Transport', 'Phone', 'Subscriptions', 'Health & Fitness', 'Debt & Finance', 'Other'];
 
 /* ---------- components ---------- */
-function ledgerRow(e, runningBal, gone) {
-  return `<div class="lrow${gone ? ' gone' : ''}"><div class="ld"><span>${esc(C.DOW[C.dow(e.date)])}</span>${+e.date.slice(8)}</div>
-    <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
-    <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
+/* tick is for the list of payments still to come: false draws an empty tick
+   to press when one has already left the bank, true draws it pressed, on the
+   day the payment was expected, so it can be taken back off. Left out, the row
+   has no tick at all. */
+function ledgerRow(e, runningBal, gone, tick) {
+  const on = tick === true ? e.due : e.date;
+  const tags = tick === true ? '<span class="moved today">gone already</span>'
+    : (e.date === C.today() ? '<span class="moved today">today</span>' : '') + (e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : '')
+      + (e.early ? '<span class="moved">left early</span>' : '');
+  return `<div class="lrow${gone ? ' gone' : ''}"><div class="ld"><span>${esc(C.DOW[C.dow(on)])}</span>${+on.slice(8)}</div>
+    <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${tags}</small></div>
+    <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div>
+    ${tick === undefined || !e.id ? '' : `<button class="paid${tick ? ' on' : ''}" data-act="billGone" data-id="${esc(e.id)}" data-mk="${esc(e.mk)}" aria-pressed="${tick ? 'true' : 'false'}"
+      aria-label="${esc(e.name)} ${tick ? 'has not gone yet' : 'has gone already'}">✓</button>`}</div>`;
 }
 /* A bill in the list. The amount column holds one figure on every row, so the
    column lines up down the card; anything worth saying beyond the day it leaves
@@ -3165,6 +3209,27 @@ document.addEventListener('click', async e => {
     ui.game = { name: '', date: null, notes: '' }; commit(`adding ${n}`); toast('Added to log'); return; }
   if (a === 'delGame') { const g = S.games.find(x => x.id === d.id);
     if (await confirmDlg('Remove from the log?', esc(g ? g.game : ''))) { S.games = S.games.filter(x => x.id !== d.id); removed(g ? g.game : 'a game'); } return; }
+  /* A payment that left the bank before the day it was expected. Ticking it
+     says the balance typed already has it, so it is dated the day that balance
+     was read (today, if there is none): on or before the reading, it is not
+     carried off again, and it is out of what is still to leave. Kept by the
+     month the payment was due in, so next month's is untouched. */
+  if (a === 'billGone') {
+    const b = S.money.bills.find(x => x.id === d.id);
+    if (!b || !C.isMonth(d.mk)) return;
+    const name = b.name || 'That bill';
+    if (!isObj(b.gone)) b.gone = {};
+    if (b.gone[d.mk]) {
+      delete b.gone[d.mk]; if (!Object.keys(b.gone).length) delete b.gone;
+      commit(`putting ${name} back`); toast(`${name} is back in the list`); return;
+    }
+    const m = S.money, tod = C.today(), has = m.balance !== null && m.balance !== undefined && m.balance !== '';
+    const read = has && C.isDate(m.balanceOn) && m.balanceOn <= tod ? m.balanceOn : tod, floor = C.addDays(tod, -14);
+    b.gone[d.mk] = read < floor ? floor : read;        // a balance weeks old is no reading to hang it on
+    commit(`ticking ${name} as gone`);
+    toast(read < tod ? `${name} ticked as gone. Your balance is from ${C.fmtDM(read)}: if it left after that, type today's balance.` : `${name} ticked as gone, so it will not come off again`, UNDO);
+    return;
+  }
   /* The card comes off the balance as it stands today — bills and pay carried
      since it was typed included — rather than off the old typed figure, and
      the reading keeps its date: the app moved this money, the bank did not
@@ -3394,7 +3459,11 @@ async function billAmountChanged(i, next) {
   if (keep) {
     const lastMonth = b.ended || null;                 // a known final month carries over to the new price
     b.ended = C.mkey(C.addMonths(thisMonth + '-01', -1));
-    S.money.bills.splice(i + 1, 0, { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth, skip: [...(b.skip || [])] });
+    const row = { ...b, id: uid(), amount: next, started: thisMonth, ended: lastMonth, skip: [...(b.skip || [])] };
+    // a payment ticked as gone belongs to the row its month is in: this month's goes with the new price, not shared between the two
+    const went = Object.entries(b.gone || {}).filter(([k]) => k >= thisMonth);
+    if (went.length) row.gone = Object.fromEntries(went); else delete row.gone;
+    S.money.bills.splice(i + 1, 0, row);
     toast(`Old price kept until ${C.fmtM(b.ended)}`);
   } else {
     b.amount = next;

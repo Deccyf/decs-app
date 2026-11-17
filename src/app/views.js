@@ -212,7 +212,7 @@ const VIEWS = {
         <div class="sparkwrap">${sparkline(fl.series, fl.overdraft)}</div>
         <div class="results">
           <div class="r"><span>${fl.wasCarried ? 'Estimated balance today' : 'Balance today'}</span><span class="num">${C.gbp(fl.start)}</span></div>
-          <div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
+          <div class="r"><span>${fl.events.length ? `${fl.events.length} bill${fl.events.length === 1 ? '' : 's'} still to leave` : 'No bills left before pay day'}${fl.gone.length ? `<small>${fl.gone.length} ticked as gone already</small>` : ''}</span><span class="num${fl.events.length ? ' neg' : ' muted'}">${fl.events.length ? '-' + C.gbp(fl.outgoings) : '—'}</span></div>
           ${fl.amexNow ? `<div class="r"><span>AMEX balance, taken off now</span><span class="num neg">-${C.gbp(fl.amexNow)}</span></div>` : ''}
           <div class="r"><span>Balance the morning of pay day</span><span class="num">${C.gbp(fl.atPayday)}</span></div>
           ${fl.overdraft && fl.low ? `<div class="r"><span>Overdraft left at the lowest point</span><span class="num${fl.headroom < 0 ? ' neg' : ''}">${C.gbp(fl.headroom)}</span></div>` : ''}
@@ -257,18 +257,21 @@ const VIEWS = {
       ${fl.paydayPassed ? `<div class="banner mt12"><b>Pay day has been since you typed this.</b> The figures above are worked forward from ${esc(C.fmtD(fl.typedOn))} — check your bank and retype it.${fl.amex ? ` Paid the card? Press <b>Pay now</b> under American Express.` : ''}</div>`
         : fl.staleDays >= 14 ? `<div class="banner mt12"><b>That balance is ${fl.staleDays} days old.</b> Only bills have come off it since — anything you've actually spent hasn't. Check your bank and retype it.</div>` : ''}
       ${m.undated ? `<div class="banner mt12"><b>${m.undated === 1 ? 'One bill has' : m.undated + ' bills have'} no payment date.</b> ${m.undated === 1 ? "It's" : "They're"} missing from these figures — add the day of the month ${m.undated === 1 ? 'it leaves' : 'each one leaves'} in <b>Bills</b>.</div>` : ''}
-      ${fl.events.length || fl.onPay.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger">${
+      ${fl.events.length || fl.onPay.length || fl.gone.length ? `<div class="sep"></div><div class="eyebrow">Every payment between now and pay day</div><div class="ledger ticks">${
         (() => { let bal = fl.hasBal ? C.r2(fl.start - fl.amexNow) : null;      // the card is already out if it goes before pay day
           const run = amt => bal === null ? null : (bal = C.r2(bal + amt));
           const day = `<div class="ld"><span>${esc(C.DOW[C.dow(fl.to)])}</span>${+fl.to.slice(8)}</div>`;
           const small = v => v === null ? '' : `<small class="${v < 0 ? 'neg' : ''}">${C.gbp(v)}</small>`;
-          return fl.events.map(e => ledgerRow(e, run(-e.amount))).join('')
+          // the ones ticked as gone first, out of the running balance: the balance typed already has them
+          return fl.gone.map(e => ledgerRow(e, null, true, true)).join('')
+            + fl.events.map(e => ledgerRow(e, run(-e.amount), false, false)).join('')
             + (fl.net != null ? `<div class="lrow pay">${day}<div class="ln"><b>Pay day</b><small>${esc(C.fmtM(C.mkey(fl.to)))}</small></div>
               <div class="lv pos">+${C.gbp(fl.net)}${small(run(fl.net))}</div></div>
-              ${fl.onPay.map(e => ledgerRow(e, run(-e.amount))).join('')}
+              ${fl.onPay.map(e => ledgerRow(e, run(-e.amount), false, false)).join('')}
               ${fl.amexOnPay ? `<div class="lrow">${day}<div class="ln"><b>AMEX cleared</b><small>card balance</small></div>
                 <div class="lv">-${C.gbp(fl.amexOnPay)}${small(run(-fl.amexOnPay))}</div></div>` : ''}` : ''); })()
-      }</div>` : ''}
+      }</div>
+      <div class="note">Tick any that have already left your bank.</div>` : ''}
       <div class="sep"></div>${flowOptions()}</div>`;
 
     /* --- 1b. what the balance readings say has actually been spent --- */

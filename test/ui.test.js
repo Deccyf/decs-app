@@ -2231,3 +2231,69 @@ test('the payslip\'s year to date carries the tax on from the real figures', ski
   assert.match(await card(), /PAYE-£438\.20National/, 'week 32 on the running total: £25,272.96 less the free pay is £17,531, less the £3,068 paid');
   assert.doesNotMatch(await card(), /PAYE-£[\d,.]+from the payslip's year/);
 });
+
+/* ----------------------------------------- a payment that left early -- */
+test('a bill that has already left can be ticked, and is not taken off the balance again', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills[0].gone = 'x';
+  data.money.bills[2].gone = { nope: '2026-09-01', '2026-09': 'soon', '2020-01': '2020-01-03' };
+  const page = await open(t, { data, tab: 'money' });              // balance read today, 9 Sep; pay day 25 Sep
+  const free = () => page.$eval('.flowhero .amt', e => e.textContent);
+  const rows = () => page.$$eval('.ledger.ticks .lrow', rs => rs.map(r => r.querySelector('.ln b').textContent
+    + (r.querySelector('.paid') ? (r.querySelector('.paid').getAttribute('aria-pressed') === 'true' ? ' [gone]' : ' [ ]') : '')));
+  assert.equal(await free(), '£436.00', '£1,000 less council tax, energy and the £300 buffer');
+  assert.deepEqual(await rows(), ['Council Tax [ ]', 'Energy [ ]', 'Pay day']);
+
+  await page.click('.paid[data-id="2"]'); await page.waitForTimeout(400);
+  assert.equal(await free(), '£604.00', 'the council tax is inside the balance already');
+  assert.deepEqual(await rows(), ['Council Tax [gone]', 'Energy [ ]', 'Pay day']);
+  assert.match(await page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' ')), /1 bill still to leave\s*1 ticked as gone already\s*-£96\.00/);
+  assert.match(await page.$eval('.ledger.ticks .lrow', e => e.textContent.replace(/\s+/g, ' ')), /Mon\s*14\s*Council Tax\s*Housing\s*gone already/, 'on the day it was expected, and said to be gone');
+  assert.match(await page.$eval('#toast', e => e.textContent), /Council Tax ticked as gone, so it will not come off again/);
+  let s = await stored(page);
+  assert.deepEqual(s.money.bills.map(b => b.gone), [undefined, { '2026-09': '2026-09-09' }, undefined], 'kept against the month it was due, and the rubbish that was there is gone');
+  await page.click('.tabs button[data-tab="home"]'); await page.waitForTimeout(250);
+  const week = (await page.$$eval('#view .card', cs => cs.map(c => c.textContent))).find(c => c.includes('This week'));
+  assert.match(week, /Nothing leaves in the next seven days/, 'and it is off This week, where it was the only thing');
+
+  // ticking it again puts it back
+  await page.click('.tabs button[data-tab="money"]'); await page.waitForTimeout(250);
+  await page.click('.paid[data-id="2"]'); await page.waitForTimeout(400);
+  assert.equal(await free(), '£436.00');
+  assert.deepEqual(await rows(), ['Council Tax [ ]', 'Energy [ ]', 'Pay day']);
+  assert.equal((await stored(page)).money.bills[1].gone, undefined);
+});
+
+test('ticking a bill as gone against an older balance hangs it on that reading', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.balanceOn = '2026-09-07';                                 // read two days ago
+  const page = await open(t, { data, tab: 'money' });
+  const start = () => page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' ').match(/balance today\s*(£[\d,.]+)/i)[1]);
+  assert.equal(await start(), '£1,000.00');
+  await page.click('.paid[data-id="3"]'); await page.waitForTimeout(400);
+  assert.deepEqual((await stored(page)).money.bills[2].gone, { '2026-09': '2026-09-07' });
+  assert.equal(await start(), '£1,000.00', 'counted as inside the balance that was read, not taken off it now');
+  assert.equal(await page.$eval('.flowhero .amt', e => e.textContent), '£532.00', '£1,000 less the council tax and the buffer');
+  assert.match(await page.$eval('#toast', e => e.textContent), /Energy ticked as gone\. Your balance is from 07.Sep: if it left after that, type today's balance\./);
+  // the toast's Undo takes the tick back off
+  await page.click('#toast button[data-act="undo"]'); await page.waitForTimeout(400);
+  assert.equal((await stored(page)).money.bills[2].gone, undefined);
+  assert.equal(await page.$eval('.flowhero .amt', e => e.textContent), '£436.00');
+});
+
+test('a tick stays with the month it was for when the price is split', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.money.bills[2].gone = { '2026-08': '2026-08-19', '2026-09': '2026-09-09' };     // last month's and this month's
+  const page = await open(t, { data, tab: 'money', sec: 'bills' });
+  await page.click('[data-act="toggle"][data-key="editBills"]'); await page.waitForTimeout(250);
+  // set and dispatched once in the page, the way a single change arrives, so one prompt and no more
+  await page.$eval('[data-set="money.bills.2.amount"]', e => { e.value = '110'; e.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.waitForTimeout(300);
+  await page.click('#dlgForm button[value="ok"]'); await page.waitForTimeout(350);     // keep the old price
+  assert.equal(await page.evaluate(() => document.getElementById('dlg').open), false);
+  const energy = (await stored(page)).money.bills.filter(b => b.name === 'Energy');
+  assert.deepEqual(energy.map(b => [b.amount, b.ended || null, b.started]), [[96, '2026-08', '2024-01'], [110, null, '2026-09']]);
+  assert.deepEqual(energy[1].gone, { '2026-09': '2026-09-09' }, 'this month\'s tick goes with the new price');
+  await page.click('[data-act="moneyTab"][data-v="now"]'); await page.waitForTimeout(300);
+  assert.match(await page.$eval('.ledger.ticks .lrow', e => e.textContent.replace(/\s+/g, ' ')), /Energy\s*Utilities\s*gone already\s*-£110\.00/);
+});

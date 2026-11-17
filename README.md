@@ -145,6 +145,16 @@ it. Money the app moves itself — the card cleared with **Pay now** — is kept
 keeps its date, the bills carried since still come off, and the next balance
 typed takes the adjustment into the log with it.
 
+A payment that leaves the bank before the day it was expected would be taken
+off twice: once in the balance typed, and again when its date comes. Each
+payment still to leave has a tick for that. Ticking one records the day the
+balance was read against the month the payment was due (`bill.gone`), and
+`billDates` puts that month's payment on that day instead: on or before the
+reading, so it is neither carried off again nor still to come, and still
+counted once in the pay period and the stretch between balances it really left
+in. It stays on show, ticked, until the day it was expected, so it can be put
+back.
+
 **Bills.** A bill can have months off (`skip`, month numbers) for council tax
 over ten instalments or a gym frozen for winter, and a month it changes price
 each year (`review`), which nudges once a year until a new figure is typed or

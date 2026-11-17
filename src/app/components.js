@@ -1,8 +1,18 @@
 /* ---------- components ---------- */
-function ledgerRow(e, runningBal, gone) {
-  return `<div class="lrow${gone ? ' gone' : ''}"><div class="ld"><span>${esc(C.DOW[C.dow(e.date)])}</span>${+e.date.slice(8)}</div>
-    <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${e.date === C.today() ? '<span class="moved today">today</span>' : ''}${e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : ''}</small></div>
-    <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div></div>`;
+/* tick is for the list of payments still to come: false draws an empty tick
+   to press when one has already left the bank, true draws it pressed, on the
+   day the payment was expected, so it can be taken back off. Left out, the row
+   has no tick at all. */
+function ledgerRow(e, runningBal, gone, tick) {
+  const on = tick === true ? e.due : e.date;
+  const tags = tick === true ? '<span class="moved today">gone already</span>'
+    : (e.date === C.today() ? '<span class="moved today">today</span>' : '') + (e.moved ? `<span class="moved">${esc(e.why)} → moved</span>` : '')
+      + (e.early ? '<span class="moved">left early</span>' : '');
+  return `<div class="lrow${gone ? ' gone' : ''}"><div class="ld"><span>${esc(C.DOW[C.dow(on)])}</span>${+on.slice(8)}</div>
+    <div class="ln"><b>${esc(e.name)}</b><small>${esc(e.category)}${tags}</small></div>
+    <div class="lv">-${C.gbp(e.amount)}${runningBal !== null && runningBal !== undefined ? `<small class="${runningBal < 0 ? 'neg' : ''}">${C.gbp(runningBal)}</small>` : ''}</div>
+    ${tick === undefined || !e.id ? '' : `<button class="paid${tick ? ' on' : ''}" data-act="billGone" data-id="${esc(e.id)}" data-mk="${esc(e.mk)}" aria-pressed="${tick ? 'true' : 'false'}"
+      aria-label="${esc(e.name)} ${tick ? 'has not gone yet' : 'has gone already'}">✓</button>`}</div>`;
 }
 /* A bill in the list. The amount column holds one figure on every row, so the
    column lines up down the card; anything worth saying beyond the day it leaves

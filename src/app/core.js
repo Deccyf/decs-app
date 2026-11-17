@@ -236,6 +236,15 @@ function normalize() {
     const dd = Math.round(C.num(b.dueDay));
     b.dueDay = dd >= 1 ? Math.min(dd, 31) : null;
     b.started = monthOf(b.started); b.ended = monthOf(b.ended);
+    // payments ticked as gone already: the month one was due in, against the day it had left by; old ones are let go
+    if (b.gone !== undefined) {
+      if (!isObj(b.gone)) delete b.gone;
+      else {
+        const keep = C.mkey(C.addMonths(C.today(), -13));
+        Object.keys(b.gone).forEach(k => { if (!C.isMonth(k) || !C.isDate(b.gone[k]) || k < keep) delete b.gone[k]; });
+        if (!Object.keys(b.gone).length) delete b.gone;
+      }
+    }
     if (b.link !== 'Short-term' && b.link !== 'Long-term') b.link = null;
     const rv = Math.round(C.num(b.review));
     b.review = rv >= 1 && rv <= 12 ? rv : null;

@@ -670,9 +670,16 @@ const C = (() => {
       // council tax over ten instalments, a gym frozen for the winter: months off
       if (started > mk || (ended && ended < mk) || skip.includes(mo + 1)) continue;
       const s = shiftDue(`${mk}-${String(Math.min(day, dim(y, mo))).padStart(2, '0')}`, opt.shift, opt.bankHols);
-      if (s.date >= from && s.date <= to) out.push(s);
+      /* A payment ticked as gone already left before the day it was expected:
+         it sits on the day it had gone by instead, so it is still counted once
+         — in the pay period and the stretch between balances it really left in
+         — and is not taken off a balance that already has it. */
+      const went = b.gone && isDate(b.gone[mk]) ? b.gone[mk] : null;
+      const hit = went ? { date: went, nominal: s.nominal, moved: false, why: '', early: true, due: s.date } : s;
+      if (hit.date >= from && hit.date <= to) out.push(hit);
     }
-    return out;
+    // an early one can land ahead of the month before it, and the stepping below wants them in order
+    return out.some(x => x.early) ? out.sort((a, b) => a.date.localeCompare(b.date)) : out;
   }
   /* What a linked bill takes on each of its dates. A debt is carried once, to
      the day before the first of them, and then stepped from payment to payment
@@ -713,8 +720,10 @@ const C = (() => {
       const amounts = fixed === null ? linkedAmounts(b, dates, debts, m, opt) : null;
       dates.forEach((d, i) => {
         const amount = amounts ? amounts[i] : fixed;
+        // id and mk say which payment of which bill this is, which is what ticking one as gone needs
         if (amount) out.push({ date: d.date, nominal: d.nominal, moved: d.moved, why: d.why,
-          name: String(b.name || 'Bill'), category: b.category || 'Other', amount });
+          name: String(b.name || 'Bill'), category: b.category || 'Other', amount,
+          id: b.id, mk: d.nominal.slice(0, 7), early: !!d.early, due: d.due || d.date });
       });
     });
     return out.sort((a, b) => a.date.localeCompare(b.date) || b.amount - a.amount || a.name.localeCompare(b.name));
@@ -731,6 +740,9 @@ const C = (() => {
        and the period that starts that day counted it a second time. */
     const events = billEvents(m, addDays(tod, 1), addDays(to, -1), opt);
     const onPay = billEvents(m, to, to, opt);
+    /* The ones ticked as gone already that would otherwise be in the list: not
+       counted again, but shown, so the tick can be taken back off. */
+    const gone = billEvents(m, addDays(tod, -45), tod, opt).filter(e => e.early && e.due > tod && e.due <= to);
     const onPayOut = r2(onPay.reduce((a, e) => a + e.amount, 0));
     const out = events.reduce((a, e) => a + e.amount, 0);
     const hasBal = m.balance !== null && m.balance !== undefined && m.balance !== '';
@@ -786,7 +798,7 @@ const C = (() => {
     const overdraft = Math.abs(num(m.overdraft));
     const low = series.length ? series.reduce((a, x) => x.bal < a.bal ? x : a, series[0]) : null;
     return {
-      from: tod, to, days, events, outgoings: r2(out), start, hasBal, atPayday, buffer, series, low,
+      from: tod, to, days, events, gone, outgoings: r2(out), start, hasBal, atPayday, buffer, series, low,
       typed, typedOn, carried, carriedOut, carriedIn, carriedPays, adj, onPay, onPayOut,
       staleDays: typedOn ? daysBetween(typedOn, tod) : 0,
       wasCarried: !!typedOn && (carried.length > 0 || carriedPays.length > 0),
