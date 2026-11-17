@@ -9,14 +9,14 @@
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>Dec's Tracker</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231F3A5F'/%3E%3Ctext x='32' y='43' font-family='Arial' font-weight='800' font-size='30' fill='%232A9D8F' text-anchor='middle'%3ED%3C/text%3E%3C/svg%3E">
+<title><!--@title--></title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231F3A5F'/%3E%3Ctext x='32' y='43' font-family='Arial' font-weight='800' font-size='30' fill='%232A9D8F' text-anchor='middle'%3E<!--@initial-->%3C/text%3E%3C/svg%3E">
 <style>
 <!--@css--></style>
 </head>
 <body>
 <header id="hdr">
-  <div class="hgrp"><h1 id="title">Dec's Tracker</h1><div class="sub" id="sub"></div></div>
+  <div class="hgrp"><h1 id="title"><!--@title--></h1><div class="sub" id="sub"></div></div>
   <button class="iconbtn" data-act="undo" id="undoBtn" aria-label="Undo" hidden>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 6.5 4 11l4.5 4.5M4 11h10.2a5.4 5.4 0 0 1 0 10.8H9"/></svg></button>
   <button class="iconbtn" data-act="tab" data-tab="settings" id="settingsBtn" aria-label="Settings">
@@ -28,8 +28,8 @@
 <dialog id="dlg"><form method="dialog" class="dlg" id="dlgForm"></form></dialog>
 <div class="lockwrap" id="lock" hidden>
   <form class="lockcard" id="lockForm">
-    <div class="lockmark" aria-hidden="true">D</div>
-    <h2 id="lockTitle">Dec's Tracker</h2>
+    <div class="lockmark" aria-hidden="true"><!--@initial--></div>
+    <h2 id="lockTitle"><!--@title--></h2>
     <p class="muted" id="lockHint">Enter your PIN to unlock</p>
     <input type="password" inputmode="numeric" autocomplete="current-password" id="pinIn"
       aria-label="PIN" placeholder="••••••">

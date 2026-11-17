@@ -92,11 +92,13 @@ function payslipCard(r) {
       </div>
       <div class="grid2 mt12">${field('Payslip net pay', inp(`pay.actual.${r.payday}`, r.actual, 'number',
         `placeholder="${r.projected.toFixed(2)}"`))}</div>
-      <div class="note">Your payslip usually turns up a few days before the money does. Type the net off it and everything
-        — the cash flow, what is free before the next pay day, the year's total — uses that instead of the projection.
+      <div class="note">Your payslip usually turns up a few days before the money does. ${PAY_ONLY
+        ? "Type the net off it and the year's total uses that instead of the projection."
+        : "Type the net off it and everything — the cash flow, what is free before the next pay day, the year's total — uses that instead of the projection."}
         The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div>
       ${(() => { const y = (S.pay.ytd || {})[r.payday] || {};
-        return detailsBlock('ytd', 'Year to date, off the payslip', `<div class="grid2">
+        // a week 1 / month 1 code taxes each pay day on its own, so the year so far changes nothing
+        return S.pay.nonCumulative ? '' : detailsBlock('ytd', 'Year to date, off the payslip', `<div class="grid2">
           ${field('Taxable YTD', inp(`pay.ytd.${r.payday}.taxable`, y.taxable, 'number', 'min="0"'))}${field('PAYE YTD', inp(`pay.ytd.${r.payday}.paye`, y.paye, 'number', 'min="0"'))}</div>
           <div class="note">Optional. Tax is worked on the year so far, and payroll sometimes pays an hour a period late or takes one back, so the year here can drift a few pounds from the payslip's
             — which is 40p of tax whenever it crosses a whole pound. With both figures in, the pay days after this one are worked from the payslip's year instead of this app's own running total.</div>`); })()}
@@ -179,10 +181,12 @@ function spendCard(sp, fl) {
     <div class="note">Only money leaving your current account counts here.${sp.list.some(x => x.hasPay) ? ' A stretch with pay day in it is left out of the average, because the pay in it is this app\'s estimate rather than your payslip.' : ''} ${sp.since ? `Your last reading was ${sp.since} day${sp.since === 1 ? '' : 's'} ago — retype the balance to bring it up to date.` : 'Read today.'}</div></div>`;
 }
 function aboutCard() {
-  const m = S.money;
-  const counts = [[m.bills.length, 'bill'], [m.months.length, 'month'], [(m.savings.goals || []).length, 'saving goal'], [m.debts.length, 'debt'],
-    [S.house.length, 'house job'], [S.classic.length + S.mega.length, 'card'], [S.psm.length, 'magazine'], [S.games.length, 'game']]
-    .filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`).join(' · ');
+  const m = S.money, P = S.pay;
+  const counts = (PAY_ONLY
+    ? [[Object.keys(P.hours).length, 'pay day', ' with hours'], [P.fixed.length, 'line', ' every period'], [(P.rises || []).length, 'pay rise'], [Object.keys(P.actual || {}).length, 'payslip']]
+    : [[m.bills.length, 'bill'], [m.months.length, 'month'], [(m.savings.goals || []).length, 'saving goal'], [m.debts.length, 'debt'],
+      [S.house.length, 'house job'], [S.classic.length + S.mega.length, 'card'], [S.psm.length, 'magazine'], [S.games.length, 'game']])
+    .filter(([n]) => n).map(([n, w, more]) => `${n} ${w}${n === 1 ? '' : 's'}${more || ''}`).join(' · ');
   return `<div class="card"><h2>About</h2>
     <div class="row"><div class="l"><b>${esc(document.title)}</b><small>${storageOK ? 'Saving on this device.' : 'Not saving on this device.'}${pinIsSet() ? ' Encrypted.' : ''}</small></div></div>
     <div class="row"><div class="l"><b>On this device</b><small>${counts || 'Nothing yet — restore a backup or start typing.'}</small></div></div>
@@ -191,8 +195,8 @@ function aboutCard() {
       : storagePersisted === false
         ? 'The browser may clear this if the phone runs short of space. Keep a backup.'
         : 'Saved on this device.'}</small></div></div>
-    <div class="row"><div class="l"><b>Undo</b><small>The arrow in the header takes back the last change — a removed bill, a mistyped figure, even a reset — up to ${UNDO_MAX} steps, until the app is closed. Ctrl+Z on a keyboard.</small></div></div>
-    <div class="note">Built from Dec's Excel Stuff v2 — same rules, same figures. Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them in Pay → Payslip settings each April.</div></div>`;
+    <div class="row"><div class="l"><b>Undo</b><small>The arrow in the header takes back the last change — ${PAY_ONLY ? 'a removed line' : 'a removed bill'}, a mistyped figure, even a reset — up to ${UNDO_MAX} steps, until the app is closed. Ctrl+Z on a keyboard.</small></div></div>
+    <div class="note">${SEED.title ? '' : "Built from Dec's Excel Stuff v2 — same rules, same figures. "}Tax and NI rates are 2026/27 (HMRC, England/Wales/NI); update them ${PAY_ONLY ? 'under' : 'in Pay →'} Payslip settings each April.</div></div>`;
 }
 function backupCard(heading, note) {
   const age = S.backupOn ? C.daysBetween(S.backupOn, C.today()) : null;
@@ -228,7 +232,8 @@ function paySettings(p) {
       ${(() => { const y = String(+C.today().slice(0, 4) - 1); return field('EU Holiday Pay received for ' + y + ' (£)', inp('pay.hpaHistory.' + y, P.hpaHistory[y])); })()}
     </div>
     <div class="note">London weighting is paid by the period on top of the salary. It is taxed like pay, but it is not part of the hourly rate, so overtime and EU Holiday Pay leave it out.
-      The Sunday premium is a share of the hourly rate, so a pay rise moves it too and back-pays it; clear the % to use a flat figure an hour instead.</div>`)}
+      ${P.sundayAtT ? 'Sunday hours are paid at the hourly rate, so a pay rise moves them too and back-pays them.'
+        : 'The Sunday premium is a share of the hourly rate, so a pay rise moves it too and back-pays it; clear the % to use a flat figure an hour instead.'}</div>`)}
     ${detailsBlock('rises', 'Pay rises & backpay', risesList(p))}
     ${detailsBlock('fixed', 'Every period (allowances, sacrifice, deductions)', fixedList(p))}
     ${detailsBlock('tax', 'Tax years (HMRC rates)', taxYearList(p))}
@@ -260,7 +265,7 @@ function risesList(p) {
     const note = !x.from || (!(C.num(x.salary) > 0) && blank(x.london)) ? 'Fill in the date and the new salary, the new London weighting, or both.'
       : !x.arrearsOn ? 'Applies from ' + esc(C.fmtD(x.from)) + ' — no backpay. A period spanning that date is split by day.'
       : c.total ? 'Estimated backpay ' + C.gbp(c.total) + ' on ' + esc(C.fmtD(x.arrearsOn)) + ' — '
-        + [c.basic ? 'basic ' + C.gbp(c.basic) : '', c.ot ? 'overtime ' + C.gbp(c.ot) : '', c.sun ? 'Sunday premium ' + C.gbp(c.sun) : '', c.londonBack ? 'London weighting ' + C.gbp(c.londonBack) : ''].filter(Boolean).join(' + ')
+        + [c.basic ? 'basic ' + C.gbp(c.basic) : '', c.ot ? 'overtime ' + C.gbp(c.ot) : '', c.sun ? esc(SUN) + ' ' + C.gbp(c.sun) : '', c.londonBack ? 'London weighting ' + C.gbp(c.londonBack) : ''].filter(Boolean).join(' + ')
         + ' across ' + c.periods + ' pay ' + (c.periods === 1 ? 'day' : 'days') + '.'
       : 'No pay days to back-pay yet.';
     /* The London weighting usually goes up by the same percentage as the
@@ -283,7 +288,7 @@ function risesList(p) {
       ${field('New annual salary', inp(`pay.rises.${i}.salary`, x.salary))}${field('New London weighting (£ a period)', inp(`pay.rises.${i}.london`, x.london, 'number', 'min="0"'))}
       <div class="full muted small">${london}${blank(x.london) && c.sameLondon ? `<div class="btnrow"><button class="btn ghost sm" data-act="riseLondon" data-i="${i}" data-v="${c.sameLondon}">Use ${C.gbp(c.sameLondon)}</button></div>` : ''}</div>
       ${field('Backpay paid on (blank = no backpay)', inp(`pay.rises.${i}.arrearsOn`, x.arrearsOn, 'date'))}<div></div>
-      ${c.sunNow && c.sunWas && c.sunNow !== c.sunWas ? `<div class="full muted small">Sunday premium ${C.gbp(c.sunWas)} → ${C.gbp(c.sunNow)} an hour${p.sunPct ? ', as ' + p.sunPct + '% of the new hourly rate' : ''}.</div>` : ''}
+      ${c.sunNow && c.sunWas && c.sunNow !== c.sunWas ? `<div class="full muted small">${esc(SUN)} ${C.gbp(c.sunWas)} → ${C.gbp(c.sunNow)} an hour${p.sunPct ? ', as ' + p.sunPct + '% of the new hourly rate' : ''}.</div>` : ''}
       <div class="field full"><label>Backpay on overtime and Sundays too</label><label class="check"><input type="checkbox" data-set="pay.rises.${i}.otBackpay" ${x.otBackpay ? 'checked' : ''}><span>Include the hours I logged</span></label></div>
       <div class="full muted small">${note}</div><div class="full"><button class="btn danger sm" data-act="delRise" data-i="${i}" aria-label="Remove this pay change">Remove this pay change</button></div></div>`;
   }).join('') || '<div class="muted small">No pay changes recorded. Your salary has been the same throughout.</div>';
@@ -302,7 +307,7 @@ function fixedList(p) {
     : F.map(f => `<div class="row"><div class="l"><b>${esc(f.name)}</b><small>${esc(f.treatment)}${span(f) ? ' · ' + span(f) : ''}</small></div><div class="num">${C.gbp(f.amount)}</div></div>`).join('') || '<div class="empty">Nothing here yet.</div>';
   return `${rows}<div class="btnrow"><button class="btn ghost sm" data-act="toggle" data-key="editFixed">${ui.editFixed ? 'Done' : 'Edit items'}</button>${ui.editFixed ? '<button class="btn sm" data-act="addFixed">Add item</button>' : ''}</div>
     <div class="note">Allowance = taxed with pay · Sacrifice = off before tax and NI · After-tax = off net pay. On the next pay day: allowances ${C.gbp(p.allow)}, sacrifice ${C.gbp(p.sacr)}, after-tax ${C.gbp(p.after)}.</div>
-    <div class="note">Leave both dates blank for something that has always been there. Add dates for anything that starts or stops — a tech scheme, a holiday purchase — and only the pay days it covers change. A date falling mid-period is split by day, which is exactly what payroll did to the pension in May, so to change an amount, end the old line the day before and start a new one.</div>`;
+    <div class="note">Leave both dates blank for something that has always been there. Add dates for anything that starts or stops — a tech scheme, a holiday purchase — and only the pay days it covers change. A date falling mid-period is split by day, ${SEED.title ? 'the way payroll does it' : 'which is exactly what payroll did to the pension in May'}, so to change an amount, end the old line the day before and start a new one.</div>`;
 }
 function tickList() {
   const q = ui.search.trim().toLowerCase();

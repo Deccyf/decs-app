@@ -9,7 +9,7 @@ that GitHub Pages serves and a phone keeps working with no signal.
 
 ```
 src/
-  page.html          the HTML skeleton, with <!--@css--> <!--@seed--> <!--@js--> placeholders
+  page.html          the HTML skeleton, with <!--@css--> <!--@seed--> <!--@js--> placeholders (and <!--@title-->)
   styles.css         all styling; every colour is a token, so dark mode is a swap
   seed.json          the defaults a fresh install starts from
   calc.js            pure functions, no DOM — pay, tax, bank holidays, cash flow, savings, spending
@@ -20,6 +20,7 @@ src/
   app/main.js        render, events, backup, boot
 build.js             concatenates the above into index.html — no transforms, no dependencies
 sw.js                the offline cache
+variants/            other apps built from this code: one .json each, a seed and a cache name
 test/                node:test; the browser tests need playwright (a dev dependency)
 ```
 
@@ -37,6 +38,33 @@ figure already saved on a phone. The theme sits beside it under
 
 Bump `V` in `sw.js` whenever `index.html` changes, or installed phones keep
 serving the old cache.
+
+## Variants
+
+The same code can be built around another seed, for someone else. A seed can
+carry a few switches of its own, and the app reads them at start-up:
+
+| In the seed | What it does |
+|---|---|
+| `title` | The app's name: page title, heading, lock screen, About. Its first letter is the tab icon. |
+| `storageKey` | Where the figures are kept on the phone. Like the main app's, it must never change once in use. |
+| `backupName` | What a downloaded backup is called (`<name>-<date>.json`). |
+| `payOnly` | Pay and its settings only: no bar of tabs, the gear goes to Settings and back. |
+| `sundayLabel` | What the Sunday line on a payslip is called. |
+| `pay.sundayAtT` | Sunday hours are paid at the plain hourly rate, not a premium. |
+| `pay.nonCumulative` | A week 1 / month 1 tax code: every pay day is taxed on its own. |
+
+`variants/vince.json` is one of these: **Vince's Pay**, published from
+`Deccyf/vinces-app`. `npm run build:vince` writes `dist/vince/index.html` and
+`dist/vince/sw.js` (not committed here); those two files replace the ones in
+his repo, whose manifest and icons stay as they are. The service worker is this
+app's own with the cache renamed, and its version is the `cache` in the
+variant's file — bump it there whenever his `index.html` changes.
+
+Both apps are served from the same address, which means they share one
+localStorage and one set of offline caches. That is why each has a storage key
+of its own, and why each service worker clears out only the caches that carry
+its own name.
 
 ## How the figures work
 
@@ -310,6 +338,6 @@ their backgrounds and field edges at 3:1, and a theme picked in Settings sets
 
 ## Tests
 
-See [test/README.md](test/README.md). The short version: `npm test` runs both
-suites, the calc tests need no browser, and the browser tests skip rather than
-fail if Playwright is not installed.
+See [test/README.md](test/README.md). The short version: `npm test` runs all
+three suites, the calc tests need no browser, and the browser tests skip rather
+than fail if Playwright is not installed.

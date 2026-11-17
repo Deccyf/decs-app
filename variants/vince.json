@@ -1,0 +1,52 @@
+{
+ "cache": "vince-pay-v7",
+ "seed": {
+  "version": 1,
+  "generic": true,
+  "payOnly": true,
+  "storageKey": "vince-pay-v1",
+  "backupName": "vince-pay",
+  "name": "Vince",
+  "title": "Vince's Pay",
+  "sundayLabel": "Sunday pay",
+  "money": {
+   "buffer": 0,
+   "bills": [],
+   "months": [],
+   "debts": []
+  },
+  "house": [],
+  "classic": [],
+  "mega": [],
+  "psm": [],
+  "games": [],
+  "goals": "",
+  "pay": {
+   "salary": null,
+   "hoursWeek": 37,
+   "weeksYear": 52.1667,
+   "sundayRate": null,
+   "nextPayDay": "2026-08-28",
+   "periodEndDays": 6,
+   "personalAllowance": 12570,
+   "taxCode": "1257L",
+   "fixed": [],
+   "hours": {},
+   "hpaHistory": {},
+   "tax": {
+    "basicRate": 0.2,
+    "basicBand": 37700,
+    "higherRate": 0.4,
+    "higherBand": 125140,
+    "addRate": 0.45,
+    "niPT": 12570,
+    "niUEL": 50270,
+    "niMain": 0.08,
+    "niUpper": 0.02,
+    "taxYearStart": "2026-04-06"
+   },
+   "sundayAtT": true,
+   "nonCumulative": true
+  }
+ }
+}

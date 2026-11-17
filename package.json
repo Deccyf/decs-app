@@ -5,6 +5,7 @@
   "description": "Dec's Tracker \u2014 pay, cash flow, bills, collections and games. A single-file offline PWA.",
   "scripts": {
     "build": "node build.js",
+    "build:vince": "node build.js vince",
     "pretest": "node build.js",
     "test": "node --test test/*.test.js",
     "test:calc": "node build.js && node --test test/calc.test.js",

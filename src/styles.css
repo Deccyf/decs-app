@@ -53,6 +53,7 @@ html{-webkit-text-size-adjust:100%;background:var(--bg);scroll-padding:84px 0 90
 body{margin:0;font:16px/1.45 var(--sans);color:var(--ink);background:var(--bg);
   padding-bottom:calc(78px + env(safe-area-inset-bottom));-webkit-tap-highlight-color:transparent}
 body.notabs{padding-bottom:24px}
+.backrow{margin:2px 0 10px}
 :where(a){color:var(--brand)}
 ::selection{background:color-mix(in srgb,var(--teal) 30%,transparent)}
 

@@ -4,6 +4,7 @@ const KEY = SEED.storageKey || 'decs-stuff-v1';
 const THEME_KEY = KEY + ':theme';
 const PAY_ONLY = !!SEED.payOnly;
 const SUN = SEED.sundayLabel || 'Sunday premium';
+const BACKUP_NAME = SEED.backupName || 'decs-tracker';      // what a downloaded backup file is called
 const clone = o => JSON.parse(JSON.stringify(o));
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 // an "Every period" line that is really the London weighting

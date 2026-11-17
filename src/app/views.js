@@ -418,7 +418,9 @@ const VIEWS = {
   },
 
   settings() {
-    let h = `<div class="card"><h2>Appearance</h2>
+    // no bar along the bottom in a pay-only app, so the way back is the first thing on the page
+    let h = PAY_ONLY ? `<div class="backrow"><button class="btn ghost sm" data-act="tab" data-tab="pay">‹ Back to pay</button></div>` : '';
+    h += `<div class="card"><h2>Appearance</h2>
       ${segment('theme', theme, [{ v: 'auto', l: 'Auto' }, { v: 'light', l: 'Light' }, { v: 'dark', l: 'Dark' }])}
       <div class="note">Auto follows your phone's own light or dark setting.</div></div>`;
     h += pinCard();

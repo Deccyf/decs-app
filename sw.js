@@ -1,5 +1,8 @@
 /* Dec's Tracker — offline cache. Bump V whenever index.html changes. */
-const V = 'decs-tracker-v40';
+const V = 'decs-tracker-v41';
+// the caches this app owns: it used to be "Dec's Stuff", so the old name is swept up too.
+// Another app at the same address keeps its own (build.js renames these for a variant).
+const MINE = /^decs-(stuff|tracker)-v/;
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 const NET_TIMEOUT = 2500;
 
@@ -8,8 +11,7 @@ self.addEventListener('install', e => {
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
-    // the app used to be "Dec's Stuff", so sweep up caches under the old name too
-    .then(ks => Promise.all(ks.filter(k => k !== V && /^decs-(stuff|tracker)-v/.test(k)).map(k => caches.delete(k))))
+    .then(ks => Promise.all(ks.filter(k => k !== V && MINE.test(k)).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 

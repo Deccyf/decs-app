@@ -23,7 +23,14 @@ browser you already have:
 PW_CHROMIUM=/path/to/chromium npm test
 ```
 
-Both suites pin "today" to a fixed date, so the figures are the same on every
+`test/variant.test.js` builds the pay-only variant (`variants/vince.json`)
+itself and drives that: the build is the same page with another seed and
+nothing else, data stored by the version it replaces opens with nothing lost,
+there is no way to a screen the variant does not have, and — with the main app
+served beside it on one address, as the two are published — each keeps to its
+own storage key and its own offline cache.
+
+The suites pin "today" to a fixed date, so the figures are the same on every
 run — a lot of them assert exact pounds and pence. The browser tests do it by
 replacing `window.Date` before the page loads, and each one asserts that the
 page logged no console or uncaught errors.

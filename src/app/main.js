@@ -43,7 +43,9 @@ function render(keepScroll = true) {
     v = { title: 'Something broke', sub: '', html: `<div class="card"><h2>That view wouldn't draw</h2>
       <div class="muted">Usually a backup with something missing in it. Your data is untouched — download it, then reset and restore.</div>
       <pre class="mono small errpre">${esc(String(err && err.message || err))}</pre>
-      <div class="btnrow"><button class="btn" data-act="export">Download backup</button><button class="btn ghost" data-act="tab" data-tab="home">Back to Home</button>
+      <div class="btnrow"><button class="btn" data-act="export">Download backup</button>${PAY_ONLY
+        ? (tab === 'pay' ? '' : '<button class="btn ghost" data-act="tab" data-tab="pay">Back to pay</button>')
+        : '<button class="btn ghost" data-act="tab" data-tab="home">Back to Home</button>'}
       <button class="btn danger" data-act="reset">Reset everything</button></div></div>` };
   }
   $('#title').textContent = v.title; $('#sub').textContent = v.sub || ''; $('#view').innerHTML = v.html;
@@ -55,6 +57,8 @@ function render(keepScroll = true) {
     b.tabIndex = on || (!inBar && i === 0) ? 0 : -1;
   });
   $('#settingsBtn').classList.toggle('on', tab === 'settings');
+  // with no bar to go back by, the gear is also the way out of Settings
+  $('#settingsBtn').setAttribute('aria-label', PAY_ONLY && tab === 'settings' ? 'Back to pay' : 'Settings');
   const u = $('#undoBtn'), last = hist.past[hist.past.length - 1];
   u.hidden = !last;
   u.setAttribute('aria-label', last ? `Undo ${last.label}` : 'Undo');
@@ -86,7 +90,10 @@ document.addEventListener('click', async e => {
   if (!S && a !== 'forgotPin') return;                 // still locked; nothing to act on
   // the second click of a double-click lands on whatever slid up under the pointer
   if (e.detail > 1 && a.startsWith('del')) return;
-  if (a === 'tab') { tab = d.tab; if (d.sec) ui.moneyTab = d.sec;
+  if (a === 'tab') {
+    // a pay-only app is one screen and its settings: the gear opens them and, pressed again, goes back
+    tab = !PAY_ONLY ? d.tab : d.tab === 'settings' && tab !== 'settings' ? 'settings' : 'pay';
+    if (d.sec) ui.moneyTab = d.sec;
     if (d.payday) { ui.payday = d.payday; ui.openYears[d.payday.slice(0, 4)] = true; }   // land on the one being asked about
     render(false); return; }
   if (a === 'moneyTab') { ui.moneyTab = d.v; render(false); return; }
@@ -458,7 +465,7 @@ async function billAmountChanged(i, next) {
 function exportBackup() {
   S.backupOn = C.today();                              // stamped before it is written, so the file records its own date
   const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }); const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `decs-tracker-${C.today()}.json`; document.body.appendChild(a); a.click();
+  a.href = URL.createObjectURL(blob); a.download = `${BACKUP_NAME}-${C.today()}.json`; document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
   save(); historyMark(); render();                     // downloading is not an edit, so keep it out of undo
   toast('Backup downloaded');
