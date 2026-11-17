@@ -44,17 +44,50 @@ Everything below lives in `calc.js` as a pure function, which is why the sums
 can be tested without a browser.
 
 **Pay.** `payCalc` works a 4-weekly payroll: cumulative PAYE against the tax
-week, NI per period from thresholds derived the way HMRC derives them (weekly,
-rounded up, multiplied), overtime and Sunday premium, salary sacrifice and
-allowances, pay rises with backpay, and Southeastern's EU holiday pay. NI is
-taken to the penny each pay day by HMRC's rule, which looks only at the third
-decimal place (5 or less goes down, 6 or more up), so every pay day is pounds
-and pence and the year's totals are exactly the pay days added up. Rates
+week, NI per period, overtime and Sunday premium, salary sacrifice and
+allowances, pay rises with backpay, and Southeastern's EU holiday pay. Rates
 live in `pay.taxYears`, one entry per year, so April is a data change rather
 than a code change. The personal allowance is whatever the tax code says, as
 the code's number × 10 + 9 — 12,579 for 1257L, which is what HMRC's own tables
 use — and the app does not work the £100k taper out, because payroll does not
 either, so it says when the code on file has clearly not been updated.
+
+The sums were checked line by line against six real payslips, and these are
+the rules that make them come out to the penny — each one was a penny or
+forty out before:
+
+- **Basic pay is four weekly rates.** Payroll holds a weekly rate, to the
+  penny, over 313/6 weeks in the year (the "52.1667", which is taken as the
+  fraction itself however many places it was typed to). £52,000 a year is
+  £996.81 a week and £3,987.24 a period, not the £3,987.22 of dividing the
+  year straight down.
+- **Free pay is the code's weekly figure**, rounded up to the penny, times the
+  tax week, and a code over 500 is so many 500s at £96.16 plus the remainder
+  (`freeWeekly`). For 1257L that is £241.92 a week where a share of the year
+  is £241.90; taxable pay is floored to the pound, so those pennies move 40p
+  of tax on some pay days and none on others.
+- **NI thresholds for four weeks** are the year's × 4/52, rounded up: £967 and
+  £3,867, which is what a payslip prints as NI-able pay to the upper limit.
+  NI is then taken to the penny by HMRC's rule, which looks only at the third
+  decimal place (5 or less goes down, 6 or more up).
+- **The Sunday premium is a share of the hourly rate** (`pay.sundayPct`, 12%
+  on Southeastern), so a rise moves it with the hourly rate — which is not
+  always the old premium put up by the same percentage, to the penny — and
+  back-pays it on the Sunday hours logged. A flat figure an hour
+  (`pay.sundayRate`) is still there for when the share is left blank, and one
+  typed before this existed is carried over as a share where it is exactly a
+  whole percentage of the hourly rate.
+- **Each fixed line is its own penny amount.** A pension that changes part-way
+  through a period is the old figure for its days and the new for its days,
+  each rounded, as the payslip prints them.
+- **A rise typed as a percentage makes a whole-pound salary**, because a pay
+  scale is in whole pounds.
+
+Tax is cumulative, so it depends on the year so far, and this app's year can
+drift from payroll's: an hour paid a period late, or taken back, is a few
+pounds in the running total and 40p of tax whenever it crosses a pound.
+`pay.ytd` holds the payslip's own year to date (taxable pay and tax paid)
+against a pay day, and the pay days after it are worked from that instead.
 
 The schedule always holds the whole of the current tax year, since its totals
 are on screen, plus last calendar year while its holiday pay is still an

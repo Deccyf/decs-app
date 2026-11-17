@@ -531,6 +531,7 @@ body.locked header,body.locked main,body.locked .tabs{display:none}
     "hoursWeek": 35,
     "weeksYear": 52.1667,
     "sundayRate": 3.7,
+    "sundayPct": 12,
     "nextPayDay": "2026-08-28",
     "periodEndDays": 6,
     "payslipLead": 4,
@@ -647,6 +648,14 @@ const C = (() => {
 
   /* ---------- pay ---------- */
   const TAXKEYS = ['personalAllowance', 'basicRate', 'basicBand', 'higherRate', 'higherBand', 'addRate', 'niPT', 'niUEL', 'niMain', 'niUpper'];
+  /* 313 working days a year in six-day weeks: the 52.1667 that payroll divides
+     a salary by. The places 52.1667 leaves off are enough to round a weekly
+     rate the wrong way — £52,000 is £996.81 a week, and 52.1667 makes it
+     £996.80 — so a figure that close is taken as the fraction itself. */
+  const WEEKS_YEAR = 313 / 6;
+  const weeksOf = p => { const w = num(p && p.weeksYear); return !w || Math.abs(w - WEEKS_YEAR) < 1e-4 ? WEEKS_YEAR : w; };
+  // the hourly rate on the salary as first typed, before any rise: what a flat Sunday premium is measured against
+  const baseHourly = p => num(p && p.salary) > 0 ? r2(num(p.salary) / weeksOf(p) / (num(p.hoursWeek) || 35)) : 0;
   // the allowance is the tax code's number × 10 + 9, which is what HMRC's own tables use: 1257L is 12,579
   const TAXDEF = { personalAllowance: 12579, basicRate: 0.2, basicBand: 37700, higherRate: 0.4, higherBand: 125140,
     addRate: 0.45, niPT: 12570, niUEL: 50270, niMain: 0.08, niUpper: 0.02 };
@@ -667,7 +676,7 @@ const C = (() => {
     /* A cleared box must not take the whole tab down with it: no hours made the
        hourly rate Infinity and every figure NaN, and no pay day threw. Each falls
        back to what a fresh install starts with. */
-    const weeks = num(p.weeksYear) || 52.1667, hoursWk = num(p.hoursWeek) || 35;
+    const weeks = weeksOf(p), hoursWk = num(p.hoursWeek) || 35;
     const ped = blank(p.periodEndDays) ? 6 : num(p.periodEndDays);
     /* A pay rise can move the salary, the London weighting, or both — a rise
        that leaves one of them blank leaves it where it was. idx is the rise's
@@ -697,9 +706,24 @@ const C = (() => {
        NI'd like it, but not part of the hourly rate, so not of overtime or
        holiday pay either. */
     const avgLondon = avgOf('london', num(p.london), setLondon);
-    const basicOf = sal => r2(sal / weeks * 4);
+    /* Payroll holds a weekly rate, to the penny, and pays four of them. £52,000
+       a year is £996.81 a week and so £3,987.24 a period; the year divided
+       straight down to four weeks is £3,987.22, which is not what a payslip
+       says. */
+    const basicOf = sal => r2(r2(sal / weeks) * 4);
     const hourlyOf = sal => r2(sal / weeks / hoursWk);
-    // fixed items can have a start and an end; a period is charged for the days the item was in force
+    /* The Sunday premium can be a share of the hourly rate — 12% on
+       Southeastern — and then it moves with a pay rise, to the penny the
+       payslip shows (putting the old premium up by the rise's percentage can
+       land a penny out), and is back-paid with one. A flat figure an hour
+       stays flat. */
+    const sunPct = num(p.sundayPct);
+    const sunRateOf = hourly => p.sundayAtT ? hourly : sunPct > 0 ? r2(hourly * sunPct / 100) : num(p.sundayRate);
+    /* Fixed items can have a start and an end; a period is charged for the days
+       the item was in force. Each line is its own penny amount, as it is on a
+       payslip: a pension that goes from £100.01 to £110.02 nine days into a
+       period is £32.15 and £74.66, so £106.81 — not the £106.80 that adding
+       the fractions up first and rounding once comes to. */
     const itemsOn = start => {
       const out = { allow: 0, sacr: 0, after: 0 }, last = addDays(start, 27);
       (p.fixed || []).forEach(it => {
@@ -708,7 +732,7 @@ const C = (() => {
         const a = it.from && it.from > start ? it.from : start, b = it.to && it.to < last ? it.to : last;
         const days = a <= b ? daysBetween(a, b) + 1 : 0;
         if (!days) return;
-        const v = amt * days / 28;
+        const v = r2(amt * days / 28);
         if (it.treatment === 'Allowance') out.allow += v;
         else if (it.treatment === 'Sacrifice') out.sacr += v;
         else out.after += v;
@@ -732,20 +756,34 @@ const C = (() => {
         return out;
       });
     const ratesOn = day => { let e = years[0]; years.forEach(x => { if (day >= x.from) e = x; }); return e; };
-    // HMRC method: free pay and bands proportioned to the tax week, taxable pay floored to whole pounds
+    /* HMRC's free pay is not the year's allowance shared out. It is the tax
+       code's weekly figure, rounded up to the penny, times the tax week — and a
+       code over 500 is so many 500s at £96.16 a week plus what is left over.
+       For 1257L that is £241.92 a week where a straight share is £241.90, and
+       8p a period is enough to move the taxable pound and 40p of tax with it,
+       on some pay days and not others. The allowance held here is the code
+       × 10 + 9, so the code is read back out of it. */
+    const freeWeekly = pa => {
+      const code = Math.floor(num(pa) / 10);
+      if (!(code > 0)) return 0;
+      const fives = Math.floor((code - 1) / 500), rest = code - fives * 500;
+      return r2(fives * 96.16 + Math.ceil((rest * 10 + 9) / 52 * 100 - 1e-9) / 100);
+    };
+    // HMRC method: free pay as above, bands proportioned to the tax week, taxable pay floored to whole pounds
     const taxOn = (cum, wk, e) => {
-      const free = Math.round(num(e.personalAllowance) * wk / 52 * 100) / 100;
+      const free = r2(freeWeekly(e.personalAllowance) * wk);
       const a = Math.floor(cum - free);
       if (a <= 0) return 0;
       const b1 = num(e.basicBand) * wk / 52, b2 = num(e.higherBand) * wk / 52;
       return r2(num(e.basicRate) * Math.min(a, b1) + num(e.higherRate) * Math.min(Math.max(a - b1, 0), b2 - b1) + num(e.addRate) * Math.max(a - b2, 0));
     };
-    /* HMRC works NI thresholds out per week, rounded up to the whole pound, and
-       multiplies up for longer periods. Dividing the annual figure by 13 lands
-       a pound under the published 4-weekly threshold, which is enough to stop
-       the pennies matching the payslip. */
+    /* The NI thresholds for four weeks are the year's, times 4/52, rounded up
+       to the pound: £967 and £3,867, which is what the payslip prints as the
+       NI-able pay up to the upper limit. Rounding the weekly figure up first
+       and then taking four of them gives £968 and £3,868, and 2p too little NI
+       on every pay day above the upper limit. */
     const niOn = (x, e) => {
-      const PT = Math.ceil(num(e.niPT) / 52) * 4, UEL = Math.ceil(num(e.niUEL) / 52) * 4;
+      const PT = Math.ceil(num(e.niPT) * 4 / 52 - 1e-9), UEL = Math.ceil(num(e.niUEL) * 4 / 52 - 1e-9);
       return num(e.niMain) * Math.min(Math.max(x - PT, 0), UEL - PT) + num(e.niUpper) * Math.max(x - UEL, 0);
     };
     /* What is actually taken is a whole number of pence. HMRC's rule for NI
@@ -788,9 +826,9 @@ const C = (() => {
       const ot = num(h.ot), sun = num(h.sun);
       const sal = avgSalary(start, payday), rowBasic = basicOf(sal), rowHourly = hourlyOf(sal);
       const fix = itemsOn(start), london = r2(avgLondon(start, payday));
-      const sunRate = p.sundayAtT ? rowHourly : num(p.sundayRate);
+      const sunRate = sunRateOf(rowHourly);
       const otPay = r2(ot * rowHourly), sunPay = r2(sun * sunRate);
-      rows.push({ payday, start, end, ot, sun, otPay, sunPay, basic: rowBasic, hourly: rowHourly, salary: sal, london,
+      rows.push({ payday, start, end, ot, sun, otPay, sunPay, sunRate, basic: rowBasic, hourly: rowHourly, salary: sal, london,
         allow: fix.allow, sacr: fix.sacr, after: fix.after,
         refYear: end.slice(0, 4), taxYear: aprilStart(payday), rates: ratesOn(payday), hpaPay: 0, backpay: 0, backpayOt: 0,
         past: payday <= tod, next: payday === next, warm: payday < shownFrom });
@@ -805,7 +843,9 @@ const C = (() => {
       const pct = setSalary(r) && prevSalary > 0 ? num(r.salary) / prevSalary - 1 : null;
       const out = { idx: r.idx, from: r.from, salary: setSalary(r) ? num(r.salary) : null, london: setLondon(r) ? num(r.london) : null,
         prevSalary, prevLondon, pct, sameLondon: pct !== null && prevLondon > 0 ? r2(prevLondon * (1 + pct)) : null,
-        arrearsOn: r.arrearsOn || null, otBackpay: !!r.otBackpay, basic: 0, ot: 0, londonBack: 0, total: 0, periods: 0 };
+        arrearsOn: r.arrearsOn || null, otBackpay: !!r.otBackpay, basic: 0, ot: 0, sun: 0, londonBack: 0, total: 0, periods: 0,
+        // what an hour of Sunday is worth before and after, where the premium follows the hourly rate
+        sunWas: sunRateOf(hourlyOf(prevSalary)), sunNow: sunRateOf(hourlyOf(setSalary(r) ? num(r.salary) : prevSalary)) };
       if (!r.arrearsOn) return out;
       /* Each rise is measured against the ones before it rather than against the
          old salary, or two rises backdated over the same months would both be
@@ -819,14 +859,19 @@ const C = (() => {
         out.periods++;
         if (due > paid) {
           out.basic += basicOf(due) - basicOf(paid);
-          if (r.otBackpay) out.ot += (row.ot + (p.sundayAtT ? row.sun : 0)) * (hourlyOf(due) - hourlyOf(paid));
+          // the hours logged, at the difference in the rate: overtime, and the Sunday premium where that moved too
+          if (r.otBackpay) {
+            out.ot += row.ot * (hourlyOf(due) - hourlyOf(paid));
+            out.sun += row.sun * (sunRateOf(hourlyOf(due)) - sunRateOf(hourlyOf(paid)));
+          }
         }
         if (lDue > lPaid) out.londonBack += lDue - lPaid;
       });
-      out.basic = r2(out.basic); out.ot = r2(out.ot); out.londonBack = r2(out.londonBack);
-      out.total = r2(out.basic + out.ot + out.londonBack);
+      out.basic = r2(out.basic); out.ot = r2(out.ot); out.sun = r2(out.sun); out.londonBack = r2(out.londonBack);
+      out.total = r2(out.basic + out.ot + out.sun + out.londonBack);
       const target = rows.find(x => x.payday === r.arrearsOn) || rows.find(x => x.payday >= r.arrearsOn);
-      if (target && out.total) { target.backpay = r2(target.backpay + out.total); target.backpayOt = r2(target.backpayOt + out.ot); }
+      // overtime and Sunday backpay are both pay for hours worked, so both count towards holiday pay
+      if (target && out.total) { target.backpay = r2(target.backpay + out.total); target.backpayOt = r2(target.backpayOt + out.ot + out.sun); }
       return out;
     });
 
@@ -853,9 +898,9 @@ const C = (() => {
       return { year: y, qualifying: hpaYears[y] ? hpaYears[y].qualifying : null, periods: hpaYears[y] ? hpaYears[y].periods : 0, logged: hpaYears[y] ? hpaYears[y].logged : 0,
         est, received, gross, net: gross ? marginalNet(gross) : 0, payday: payRow ? payRow.payday : null };
     });
-    let n = 0, cum = 0, paid = 0, curYear = null;
+    let n = 0, cum = 0, paid = 0, curYear = null, ytdOn = null;
     rows.forEach(r => {
-      if (r.taxYear !== curYear) { curYear = r.taxYear; n = 0; cum = 0; paid = 0; }   // new tax year, start again
+      if (r.taxYear !== curYear) { curYear = r.taxYear; n = 0; cum = 0; paid = 0; ytdOn = null; }   // new tax year, start again
       const e = r.rates;
       const extraGross = r.otPay + r.sunPay;
       const taxable = r2(r.basic + r.london + r.allow + r.otPay + r.sunPay + r.hpaPay + r.backpay - r.sacr);
@@ -869,11 +914,20 @@ const C = (() => {
         tax = taxOn(taxable, 4, e);
         marginal = tax - taxOn(taxable - extraGross, 4, e);
       } else {                                          // cumulative: tax due on the year to date, less tax already paid
+        r.ytdFrom = ytdOn;                              // the payslip this pay day's tax was carried on from, if any
         cum = r2(cum + taxable);
         const wk = 4 * n, due = taxOn(cum, wk, e);
         tax = r2(due - paid);
         marginal = due - taxOn(r2(cum - extraGross), wk, e);
         paid = due;
+        /* The payslip prints the year so far — taxable pay and tax paid. Typed
+           in, those are where the next pay day starts from, instead of this
+           app's own running total: payroll pays an hour late, or takes one
+           back, and the total here is then a few pounds out, which is 40p of
+           tax whenever it crosses a whole pound. This pay day's own figures
+           stay as worked. */
+        const y = (p.ytd || {})[r.payday];
+        if (y && !blank(y.taxable) && !blank(y.paye) && num(y.taxable) > 0) { cum = r2(num(y.taxable)); paid = r2(num(y.paye)); ytdOn = r.payday; }
       }
       const niRaw = niOn(taxable, e), nic = niPence(niRaw);
       Object.assign(r, { extraGross, taxable, paye: tax, ni: nic,
@@ -931,7 +985,8 @@ const C = (() => {
     /* allRows keeps the pay days worked out only to get the tax right. They are
        not shown, but they happened: a balance typed before the schedule on show
        begins still has their pay carried into it. */
-    return { basic, hourly, london, allow, sacr, after, rows: shown, allRows: rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
+    return { basic, hourly, london, allow, sacr, after, sunRate: sunRateOf(hourly), sunPct: p.sundayAtT ? 0 : sunPct,
+      rows: shown, allRows: rows, totals, nextIdx, hpa, rises: riseCalc, years, paCheck,
       payslipLead: lead, needsPayslip, nextPayDay: next, taxYear: `${thisTaxYear.slice(0, 4)}/${addMonths(thisTaxYear, 12).slice(2, 4)}` };
   }
 
@@ -1480,7 +1535,7 @@ const C = (() => {
 
   return { r2, num, isDate, isMonth, addDays, addMonths, daysBetween, today, mkey, dow, fmtD, fmtDM, fmtDow, fmtM, fmtMs, ord, gbp, pct, rate,
     easter, bankHolidays, isBankHol, isWorkingDay, shiftDue, billDates, billEvents, runway, periodFlows,
-    payCalc, payBefore, moneyCalc, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
+    payCalc, payBefore, moneyCalc, WEEKS_YEAR, weeksOf, baseHourly, debtPayoff, debtNow, priceHistory, savingsCalc, spendLog, collections, gamesStats, MON, DOW };
 })();
 
 /* ===== app: state, views, events ===== */
@@ -1777,6 +1832,20 @@ function normalize() {
   Object.keys(P.hpaHistory).forEach(k => { if (!/^\d{4}$/.test(k)) delete P.hpaHistory[k]; });
   if (!C.isDate(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
+  /* The Sunday premium used to be a flat figure an hour. Where that figure is
+     exactly a whole percentage of the hourly rate, to the penny, it is kept as
+     the percentage, so a pay rise moves it and back-pays it the way the
+     payslip does. Anything else stays the flat figure it was. Once. */
+  if (P.sundayPct === undefined) {
+    const hr = C.baseHourly(P), flat = C.r2(C.num(P.sundayRate));
+    const pct = hr > 0 && flat > 0 ? Math.round(flat / hr * 100) : 0;
+    P.sundayPct = pct > 0 && C.r2(hr * pct / 100) === flat ? pct
+      : !(C.num(P.salary) > 0) && SEED.pay && C.num(SEED.pay.sundayPct) > 0 && flat === C.r2(C.num(SEED.pay.sundayRate)) ? C.num(SEED.pay.sundayPct)   // nothing typed yet: the seed's own
+      : null;
+  }
+  // the year so far, off a payslip, is a pair of figures against a pay day
+  obj(P, 'ytd');
+  Object.keys(P.ytd).forEach(k => { if (!C.isDate(k) || !isObj(P.ytd[k])) delete P.ytd[k]; });
   if (P.payslipLead === undefined || P.payslipLead === null || P.payslipLead === '') P.payslipLead = 4;
   if (!C.num(P.hoursWeek)) P.hoursWeek = 35;
   if (P.periodEndDays === undefined || P.periodEndDays === null) P.periodEndDays = 6;
@@ -2625,7 +2694,8 @@ function payslipCard(r) {
       <div class="results">
         ${resRow('Basic pay', C.gbp(r.basic))}${r.london ? resRow('London weighting', C.gbp(r.london)) : ''}${r.allow ? resRow('Allowances', C.gbp(r.allow)) : ''}
         ${resRow('Overtime pay', C.gbp(r.otPay))}${resRow(SUN, C.gbp(r.sunPay))}${r.backpay ? resRow('Backpay (estimate)', C.gbp(r.backpay)) : ''}${r.hpaPay ? resRow('EU Holiday Pay' + (S.pay.hpaHistory[String(+r.refYear - 1)] != null && S.pay.hpaHistory[String(+r.refYear - 1)] !== '' ? '' : ' (estimate)'), C.gbp(r.hpaPay)) : ''}${r.sacr ? resRow('Salary sacrifice', '-' + C.gbp(r.sacr)) : ''}
-        ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', r.paye < 0 ? '+' + C.gbp(-r.paye) + '<small>tax back</small>' : r.paye ? '-' + C.gbp(r.paye) : C.gbp(0))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
+        ${resRow('Taxable pay', C.gbp(r.taxable))}${resRow('PAYE', (r.paye < 0 ? '+' + C.gbp(-r.paye) + '<small>tax back</small>' : r.paye ? '-' + C.gbp(r.paye) : C.gbp(0))
+          + (r.ytdFrom ? `<small>from the payslip's year to ${esc(C.fmtDM(r.ytdFrom))}</small>` : ''))}${resRow('National Insurance', '-' + C.gbp(r.ni))}${r.after ? resRow('After-tax deductions', '-' + C.gbp(r.after)) : ''}
         ${resRow(r.actual !== null ? 'Net pay (your payslip)' : 'Net pay (projected)', C.gbp(r.net), 'total')}
         ${r.actual !== null ? resRow('Projected was', C.gbp(r.projected) + '<small>' + (
           !r.diff ? 'spot on' : C.gbp(Math.abs(r.diff)) + (r.diff > 0 ? ' under the payslip' : ' over the payslip')) + '</small>') : ''}
@@ -2635,6 +2705,11 @@ function payslipCard(r) {
       <div class="note">Your payslip usually turns up a few days before the money does. Type the net off it and everything
         — the cash flow, what is free before the next pay day, the year's total — uses that instead of the projection.
         The breakdown above stays as it was worked out, because that is what explains the figure. Clear the box to go back to the projection.</div>
+      ${(() => { const y = (S.pay.ytd || {})[r.payday] || {};
+        return detailsBlock('ytd', 'Year to date, off the payslip', `<div class="grid2">
+          ${field('Taxable YTD', inp(`pay.ytd.${r.payday}.taxable`, y.taxable, 'number', 'min="0"'))}${field('PAYE YTD', inp(`pay.ytd.${r.payday}.paye`, y.paye, 'number', 'min="0"'))}</div>
+          <div class="note">Optional. Tax is worked on the year so far, and payroll sometimes pays an hour a period late or takes one back, so the year here can drift a few pounds from the payslip's
+            — which is 40p of tax whenever it crosses a whole pound. With both figures in, the pay days after this one are worked from the payslip's year instead of this app's own running total.</div>`); })()}
       ${/* last in the card on purpose: it bleeds to the edges and rounds off the bottom */ ''}
       <div class="results">${resRow('Extra from overtime', r.extraGross ? C.gbp(r.extra) + '<small>you keep ' + C.pct(r.keep) + '</small>' : '–', 'extra')}</div></div>`;
 }
@@ -2754,12 +2829,16 @@ function paySettings(p) {
     ${detailsBlock('yourpay', 'Your pay', `<div class="grid2">
       ${field('Annual basic salary', inp('pay.salary', P.salary))}${field('London weighting (£ a period)', inp('pay.london', P.london, 'number', 'min="0" placeholder="0"'))}
       ${field('Contracted hours / week', inp('pay.hoursWeek', P.hoursWeek))}${field('Weeks per year (payroll)', inp('pay.weeksYear', P.weeksYear))}
-      ${P.sundayAtT ? field('Sunday hours', '<input type="text" value="paid at plain time" disabled>') : field('Sunday premium £/hr', inp('pay.sundayRate', P.sundayRate))}${field('Next pay day', inp('pay.nextPayDay', p.nextPayDay, 'date', 'required'))}
+      ${P.sundayAtT ? field('Sunday hours', '<input type="text" value="paid at plain time" disabled>')
+        : field('Sunday premium, % of hourly rate', inp('pay.sundayPct', P.sundayPct, 'number', 'min="0" placeholder="blank = a flat £/hr"'))
+          + (C.num(P.sundayPct) > 0 ? field('Sunday premium now', `<input type="text" value="${C.gbp(p.sunRate)} an hour" disabled>`)
+            : field('Sunday premium £/hr', inp('pay.sundayRate', P.sundayRate)))}${field('Next pay day', inp('pay.nextPayDay', p.nextPayDay, 'date', 'required'))}
       ${field('Period ends (days before pay)', inp('pay.periodEndDays', P.periodEndDays))}${field('Payslip lands (days early)', inp('pay.payslipLead', P.payslipLead, 'number', 'min="0" max="28" step="1"'))}
       ${field('Tax code (note only)', inp('pay.taxCode', P.taxCode, 'text'))}
       ${(() => { const y = String(+C.today().slice(0, 4) - 1); return field('EU Holiday Pay received for ' + y + ' (£)', inp('pay.hpaHistory.' + y, P.hpaHistory[y])); })()}
     </div>
-    <div class="note">London weighting is paid by the period on top of the salary. It is taxed like pay, but it is not part of the hourly rate, so overtime and EU Holiday Pay leave it out.</div>`)}
+    <div class="note">London weighting is paid by the period on top of the salary. It is taxed like pay, but it is not part of the hourly rate, so overtime and EU Holiday Pay leave it out.
+      The Sunday premium is a share of the hourly rate, so a pay rise moves it too and back-pays it; clear the % to use a flat figure an hour instead.</div>`)}
     ${detailsBlock('rises', 'Pay rises & backpay', risesList(p))}
     ${detailsBlock('fixed', 'Every period (allowances, sacrifice, deductions)', fixedList(p))}
     ${detailsBlock('tax', 'Tax years (HMRC rates)', taxYearList(p))}
@@ -2791,7 +2870,7 @@ function risesList(p) {
     const note = !x.from || (!(C.num(x.salary) > 0) && blank(x.london)) ? 'Fill in the date and the new salary, the new London weighting, or both.'
       : !x.arrearsOn ? 'Applies from ' + esc(C.fmtD(x.from)) + ' — no backpay. A period spanning that date is split by day.'
       : c.total ? 'Estimated backpay ' + C.gbp(c.total) + ' on ' + esc(C.fmtD(x.arrearsOn)) + ' — '
-        + [c.basic ? 'basic ' + C.gbp(c.basic) : '', c.ot ? 'overtime ' + C.gbp(c.ot) : '', c.londonBack ? 'London weighting ' + C.gbp(c.londonBack) : ''].filter(Boolean).join(' + ')
+        + [c.basic ? 'basic ' + C.gbp(c.basic) : '', c.ot ? 'overtime ' + C.gbp(c.ot) : '', c.sun ? 'Sunday premium ' + C.gbp(c.sun) : '', c.londonBack ? 'London weighting ' + C.gbp(c.londonBack) : ''].filter(Boolean).join(' + ')
         + ' across ' + c.periods + ' pay ' + (c.periods === 1 ? 'day' : 'days') + '.'
       : 'No pay days to back-pay yet.';
     /* The London weighting usually goes up by the same percentage as the
@@ -2814,12 +2893,14 @@ function risesList(p) {
       ${field('New annual salary', inp(`pay.rises.${i}.salary`, x.salary))}${field('New London weighting (£ a period)', inp(`pay.rises.${i}.london`, x.london, 'number', 'min="0"'))}
       <div class="full muted small">${london}${blank(x.london) && c.sameLondon ? `<div class="btnrow"><button class="btn ghost sm" data-act="riseLondon" data-i="${i}" data-v="${c.sameLondon}">Use ${C.gbp(c.sameLondon)}</button></div>` : ''}</div>
       ${field('Backpay paid on (blank = no backpay)', inp(`pay.rises.${i}.arrearsOn`, x.arrearsOn, 'date'))}<div></div>
-      <div class="field full"><label>Backpay on overtime too</label><label class="check"><input type="checkbox" data-set="pay.rises.${i}.otBackpay" ${x.otBackpay ? 'checked' : ''}><span>Include the hours I logged</span></label></div>
+      ${c.sunNow && c.sunWas && c.sunNow !== c.sunWas ? `<div class="full muted small">Sunday premium ${C.gbp(c.sunWas)} → ${C.gbp(c.sunNow)} an hour${p.sunPct ? ', as ' + p.sunPct + '% of the new hourly rate' : ''}.</div>` : ''}
+      <div class="field full"><label>Backpay on overtime and Sundays too</label><label class="check"><input type="checkbox" data-set="pay.rises.${i}.otBackpay" ${x.otBackpay ? 'checked' : ''}><span>Include the hours I logged</span></label></div>
       <div class="full muted small">${note}</div><div class="full"><button class="btn danger sm" data-act="delRise" data-i="${i}" aria-label="Remove this pay change">Remove this pay change</button></div></div>`;
   }).join('') || '<div class="muted small">No pay changes recorded. Your salary has been the same throughout.</div>';
   return `${rows}<div class="btnrow"><button class="btn sm" data-act="addRise">Add a pay change</button></div>
     <div class="note">Type the rise as a percentage or as the new salary — either fills in the other. A percentage takes the London weighting up by the same amount too; change that box afterwards if your deal treats it differently.</div>
-    <div class="note">Pay days before the change keep the old figures. If the rise was agreed late, put the date it was backdated to in the first box (the first day of the new rate, not a pay day) and the pay day the arrears land under Backpay paid on — the shortfall on every period in between, London weighting included, is worked out for you and added to that pay day. Tick the box to include the overtime hours you logged. Pension on backpay isn't modelled, so expect a few pounds either way.</div>`;
+    <div class="note">Pay days before the change keep the old figures. If the rise was agreed late, put the date it was backdated to in the first box (the first day of the new rate, not a pay day) and the pay day the arrears land under Backpay paid on — the shortfall on every period in between, London weighting included, is worked out for you and added to that pay day. Tick the box to include the overtime and Sunday hours you logged, each at the difference in its rate, which is how the arrears lines on a payslip are made up.
+      Payroll pays arrears by whole pay periods: if a rise dated the 1st is back-paid from the period that starts on the 5th, put the 5th. A pension set once a year does not take a share of backpay, and none is taken here.</div>`;
 }
 function fixedList(p) {
   const F = S.pay.fixed;
@@ -3197,7 +3278,7 @@ document.addEventListener('change', e => {
     if (v === null) { render(); return; }                // clearing it leaves the figures it made
     const before = C.payBefore(S.pay, r.from, i);
     if (!(before.salary > 0)) { toast('Put your salary in under Your pay first'); render(); return; }
-    r.salary = C.r2(before.salary * (1 + v / 100));
+    r.salary = Math.round(before.salary * (1 + v / 100));     // a pay scale is whole pounds: 3.6% on £41,200 is paid as £42,683, not £42,683.20
     if (before.london > 0) r.london = C.r2(before.london * (1 + v / 100));
     commit('the pay rise');
     return;

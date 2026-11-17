@@ -201,7 +201,7 @@ test('shifting a bill across a pay day moves it between periods', () => {
 /* -------------------------------------------------------------- pay maths -- */
 test('basic pay, hourly rate and the rolling pay-day anchor', () => {
   const p = C.payCalc(pay({ salary: 40000 }), '2026-09-10');
-  assert.equal(p.basic, 3067.09, '40000 / 52.1667 * 4');
+  assert.equal(p.basic, 3067.08, 'a weekly rate of £766.77, four times over');
   assert.equal(p.hourly, 21.91);
   assert.equal(p.nextPayDay, '2026-09-25', 'the stored anchor rolls forward in 28-day steps');
 });
@@ -210,7 +210,7 @@ test('overtime and Sunday hours reach net pay', () => {
   const p = C.payCalc(pay({ salary: 40000, hours: { '2026-09-25': { ot: 10, sun: 4 } } }), '2026-09-10');
   const r = p.rows.find(x => x.payday === '2026-09-25');
   assert.deepEqual([r.ot, r.sun, r.otPay, r.sunPay], [10, 4, 219.1, 14.8]);
-  assert.equal(r.taxable, 3300.99);
+  assert.equal(r.taxable, 3300.98);
   assert.ok(r.net > 2300 && r.net < 2700, `net ${r.net} in a sane band`);
   assert.ok(r.extra > 0 && r.keep > 0.5 && r.keep < 1, 'you keep most, but not all, of the overtime');
 });
@@ -376,8 +376,8 @@ test('pay day updates the balance on the day, not the day after', () => {
   assert.equal(before.to, '2026-09-25');
 
   const day = on('2026-09-25');                          // pay day itself
-  assert.equal(day.carriedIn, 2545.41, 'BACS lands in the small hours, so it is in');
-  assert.equal(day.start, 2945.41, 'and the balance says so from midnight');
+  assert.equal(day.carriedIn, 2545.35, 'BACS lands in the small hours, so it is in');
+  assert.equal(day.start, 2945.35, 'and the balance says so from midnight');
   assert.equal(day.to, '2026-10-23', 'with the runway now to the next one');
   assert.equal(day.days, 28);
   assert.equal(day.paydayPassed, true, 'which is also the cue to check the bank and retype it');
@@ -599,17 +599,18 @@ test('with no long-term debt the two settings agree', () => {
 });
 
 /* ------------------------------------------------- NI thresholds & taper -- */
-test('NI uses the published 4-weekly thresholds, not the annual figure over 13', () => {
-  // HMRC works the weekly threshold out first (£12,570/52 rounded up = £242)
-  // and multiplies up, so 4-weekly is £968. 12,570/13 would give £967.
+test('the NI thresholds for four weeks are the year\'s, times 4/52, rounded up', () => {
+  // £12,570 × 4/52 is £966.92, so £967; £50,270 × 4/52 is £3,866.92, so £3,867 — the figure a payslip prints
+  // as NI-able pay up to the upper limit. Rounding the weekly figure up first (£242, £967) and taking four of
+  // them gives £968 and £3,868, which takes 2p too little off everyone paid over the upper limit.
   const at = basic => C.payCalc(pay({ salary: basic * 13, weeksYear: 52, personalAllowance: 0 }), '2026-09-18')
     .rows.find(r => r.payday === '2026-08-28');
-  assert.equal(C.r2(at(968).basic), 968, 'a period of exactly the threshold');
-  assert.equal(C.r2(at(968).ni), 0, 'nothing is due at the threshold itself');
-  assert.equal(C.r2(at(969).ni), 0.08, 'a pound over costs 8p');
-  // and the upper limit: £50,270/52 rounded up = £967 a week, £3,868 over four
-  assert.equal(C.r2(at(3868).ni), C.r2(0.08 * (3868 - 968)), 'all main rate up to the upper limit');
-  assert.equal(C.r2(at(3869).ni), C.r2(0.08 * 2900 + 0.02), 'the pound above it drops to 2%');
+  assert.equal(C.r2(at(967).basic), 967, 'a period of exactly the threshold');
+  assert.equal(C.r2(at(967).ni), 0, 'nothing is due at the threshold itself');
+  assert.equal(C.r2(at(968).ni), 0.08, 'a pound over costs 8p');
+  assert.equal(C.r2(at(3867).ni), 232, 'all main rate up to the upper limit: 8% of £2,900');
+  assert.equal(C.r2(at(3868).ni), 232.02, 'the pound above it drops to 2%');
+  assert.equal(C.r2(at(6000).ni), 274.66, '£232 and 2% of the £2,133 over');
 });
 
 test('it says when the personal allowance should have been cut back', () => {
@@ -996,8 +997,8 @@ test('two backdated rises each pay only their own step', () => {
   const p = C.payCalc(pay({ salary: 40000, rises: [
     { from: '2026-04-01', salary: 42000, arrearsOn: '2026-10-23' },
     { from: '2026-07-01', salary: 44000, arrearsOn: '2026-10-23' }] }), '2026-09-26');
-  assert.deepEqual(p.rises.map(r => r.total), [942.07, 443.62]);
-  assert.equal(p.rows.find(r => r.payday === '2026-10-23').backpay, 1385.69, 'not £1,829.34');
+  assert.deepEqual(p.rises.map(r => r.total), [942.08, 443.64]);
+  assert.equal(p.rows.find(r => r.payday === '2026-10-23').backpay, 1385.72, 'not £1,829.34');
 });
 
 test('the rises list finds each rise however they were typed in', () => {
@@ -1009,7 +1010,7 @@ test('the rises list finds each rise however they were typed in', () => {
 test('the hourly rate and basic are the ones being paid now, rises included', () => {
   const p = C.payCalc(pay({ salary: 40000, rises: [{ from: '2026-04-01', salary: 52000 }] }), '2026-09-26');
   assert.equal(p.hourly, 28.48);
-  assert.equal(p.basic, 3987.22);
+  assert.equal(p.basic, 3987.24, '£52,000 over 313/6 weeks is £996.81 a week');
   assert.equal(p.basic, p.rows[p.nextIdx].basic);
 });
 
@@ -1028,7 +1029,7 @@ test('a fourteenth pay day in one tax year is taxed on its own four weeks', () =
   const f = x => C.payCalc(pay(x), '2026-09-26').rows.find(r => r.payday === '2030-04-05');
   assert.equal(f().taxYear, '2029-04-06', '6 Apr 2029 to 5 Apr 2030 holds fourteen');
   assert.equal(f().paye, f({ nonCumulative: true }).paye, 'week 56 is week 1 basis');
-  assert.equal(f().paye, 438.4);
+  assert.equal(f().paye, 438.2, '£3,159.12 less four weeks of free pay at £241.92, the pound below, at 20%');
 });
 
 test('an item with an amount counts whether or not it has a name yet', () => {
@@ -1197,12 +1198,12 @@ const dec = x => pay(Object.assign({ salary: 56351, london: 178.80, personalAllo
 test('a pay rise carries the London weighting, back-paid with the salary', () => {
   const p = C.payCalc(dec({ rises: [{ from: '2026-04-01', salary: 58379.64, london: 185.24, arrearsOn: '2026-10-23' }] }), '2026-10-03');
   const r = p.rises[0];
-  assert.equal(r.basic, 955.52);
+  assert.equal(r.basic, 955.6);
   assert.equal(r.londonBack, 39.56, '£6.44 a period from 1 April: four days of the March period, then six whole ones');
-  assert.equal(r.total, 995.08);
+  assert.equal(r.total, 995.16);
   const row = d => p.rows.find(x => x.payday === d);
   assert.deepEqual([row('2026-09-25').london, row('2026-10-23').london], [178.8, 185.24], 'the new figure in normal pay from the arrears pay day');
-  assert.equal(row('2026-10-23').backpay, 995.08);
+  assert.equal(row('2026-10-23').backpay, 995.16);
   assert.equal(r.sameLondon, 185.24, 'the same 3.6% as the salary, offered');
 });
 
@@ -1323,12 +1324,12 @@ test('a bill or a category can be called anything, even a word JavaScript keeps 
 });
 
 test('National Insurance is a whole number of pence each pay day, rounded the way HMRC rounds it', () => {
-  // 8% of (3,159.10 - 968) is 175.288: the third decimal is 8, so up
+  // 8% of (3,159.12 - 967) is 175.3696: the third decimal is 9, so up
   const up = C.payCalc(pay(), '2026-09-09').rows.find(r => r.payday === '2026-09-25');
-  assert.deepEqual([up.taxable, up.ni], [3159.1, 175.29]);
-  // 3p less taxable makes it 175.2856: the third decimal is 5, which HMRC takes down, not up
-  const down = C.payCalc(pay({ fixed: [{ name: 'x', amount: 0.03, treatment: 'Sacrifice' }] }), '2026-09-09').rows.find(r => r.payday === '2026-09-25');
-  assert.deepEqual([down.taxable, down.ni], [3159.07, 175.28]);
+  assert.deepEqual([up.taxable, up.ni], [3159.12, 175.37]);
+  // 5p less taxable makes it 175.3656: the third decimal is 5, which HMRC takes down, not up
+  const down = C.payCalc(pay({ fixed: [{ name: 'x', amount: 0.05, treatment: 'Sacrifice' }] }), '2026-09-09').rows.find(r => r.payday === '2026-09-25');
+  assert.deepEqual([down.taxable, down.ni], [3159.07, 175.36]);
   // so every pay day is pounds and pence, and the year's totals are the pay days added up
   const p = C.payCalc(dec({ hours: { '2026-07-03': { ot: 11.5, sun: 7 }, '2026-08-28': { ot: 3, sun: 12.5 } } }), '2026-11-13');
   const pence = x => Math.abs(x * 100 - Math.round(x * 100)) < 1e-6;
@@ -1353,4 +1354,81 @@ test('a date is a real day in a year somebody could mean', () => {
     [false, false, false, false, false, false, false, false, false, false]);
   assert.deepEqual(['2026-01', '1900-01', '2199-12'].map(C.isMonth), [true, true, true]);
   assert.deepEqual(['2026-13', '2026-00', '0002-08', '1899-12', '2200-01', '9999-12', '2026-1', null].map(C.isMonth), [false, false, false, false, false, false, false, false]);
+});
+
+/* ------------------------------------- what six real payslips showed up -- */
+test('free pay is the tax code\'s weekly figure rounded up, times the week, not the year shared out', () => {
+  // 1257L: two 500s at £96.16 and (257 × 10 + 9) / 52 = £49.596, up to £49.60: £241.92 a week, £967.68 over four.
+  // A straight share of £12,579 is £967.62, and £3,967.65 of pay then lands on the other side of a pound.
+  const one = C.payCalc(pay({ nonCumulative: true, personalAllowance: 12579, fixed: [{ name: 'x', amount: 808.53, treatment: 'Allowance' }] }), '2026-09-09')
+    .rows.find(r => r.payday === '2026-09-25');
+  assert.deepEqual([one.taxable, one.paye], [3967.65, 619.6], '£2,999 taxable: £2,900 at 20% and £99 at 40%, where the shared-out figure made it £3,000 and £620');
+  // cumulatively, the seventh pay day is week 28: £22,113.84 less 28 × £241.92 is £15,340 taxable, so £3,068 so far
+  const yr = C.payCalc(pay(), '2026-09-26').allRows.filter(r => r.taxYear === '2026-04-06').slice(0, 7);
+  assert.equal(yr[6].payday, '2026-09-25');
+  assert.equal(C.r2(yr.reduce((a, r) => a + r.paye, 0)), 3068);
+  // a code of 500 or less is not split, and no allowance is no free pay
+  const tax = pa => C.payCalc(pay({ nonCumulative: true, personalAllowance: pa }), '2026-09-09').rows.find(r => r.payday === '2026-09-25').paye;
+  assert.equal(tax(5009), 554.6, '500: £96.33 a week, so £3,159.12 less £385.32 is £2,773');
+  assert.equal(tax(5019), 554.6, '501: £96.16 and 37p, £386.12 over four');
+  assert.equal(tax(4999), 554.8, '499: £96.14 a week, £384.56, so £2,774');
+  assert.equal(tax(0), 683.6, 'nothing free: £2,900 at 20% and the other £259 at 40%');
+});
+
+test('basic pay is four weekly rates, each to the penny, over 313/6 weeks', () => {
+  const basic = x => C.payCalc(pay(x), '2026-09-09').basic;
+  // £52,000 over 313/6 weeks is £996.805 a week: £996.81, and four of them
+  assert.equal(basic({ salary: 52000 }), 3987.24);
+  assert.equal(C.r2(52000 / (313 / 6) * 4), 3987.22, 'which is not the year divided straight down to four weeks');
+  // 52.1667 is that fraction cut short, however many places it was typed to
+  assert.deepEqual([52.1667, 52.16667, 52.166667, 313 / 6].map(weeksYear => basic({ salary: 52000, weeksYear })), [3987.24, 3987.24, 3987.24, 3987.24]);
+  assert.equal(basic({ salary: 52000, weeksYear: 52 }), 4000, 'any other figure is used as typed');
+  assert.equal(C.weeksOf({ weeksYear: 52.18 }), 52.18);
+});
+
+test('a Sunday premium that is a share of the hourly rate rises and is back-paid with the pay', () => {
+  const hours = { '2026-08-28': { ot: 10, sun: 8 }, '2026-09-25': { ot: 0, sun: 12 } };
+  const rise = [{ from: '2026-08-23', salary: 44000, arrearsOn: '2026-10-23', otBackpay: true }];     // from the first day of a pay period
+  const p = C.payCalc(pay({ salary: 40000, sundayPct: 12, hours, rises: rise }), '2026-10-03');
+  const row = d => p.allRows.find(r => r.payday === d);
+  // £21.91 an hour makes the premium £2.63; £24.10 makes it £2.89
+  assert.deepEqual([row('2026-08-28').hourly, row('2026-08-28').sunRate, row('2026-08-28').sunPay], [21.91, 2.63, 21.04]);
+  assert.deepEqual([row('2026-10-23').hourly, row('2026-10-23').sunRate], [24.1, 2.89]);
+  assert.equal(p.sunRate, 2.89, 'and the settings can say what an hour of Sunday is worth now');
+  const r = p.rises[0];
+  assert.deepEqual([r.sunWas, r.sunNow], [2.63, 2.89]);
+  assert.deepEqual([r.periods, r.basic, r.ot, r.sun], [1, 306.72, 0, 3.12], 'one pay day at the old rate since: 12 Sunday hours at 26p');
+  assert.equal(row('2026-10-23').backpay, 309.84);
+  assert.equal(row('2026-10-23').backpayOt, 3.12, 'pay for hours worked, so it counts towards holiday pay');
+  // a flat figure an hour stays flat: nothing to back-pay on Sundays
+  const flat = C.payCalc(pay({ salary: 40000, sundayRate: 2.63, hours, rises: rise }), '2026-10-03');
+  assert.deepEqual([flat.rises[0].sun, flat.rises[0].sunNow, flat.allRows.find(x => x.payday === '2026-10-23').sunRate], [0, 2.63, 2.63]);
+  // and Sunday hours paid at plain time are back-paid at the difference in the hourly rate, as before
+  const atT = C.payCalc(pay({ salary: 40000, sundayAtT: true, hours, rises: rise }), '2026-10-03');
+  assert.deepEqual([atT.rises[0].ot, atT.rises[0].sun], [0, 26.28]);
+});
+
+test('each fixed line is its own penny amount, the way a payslip prints it', () => {
+  // a deduction that changes nine days into a period: £32.15 at the old figure and £74.66 at the new, so £106.81
+  const fixed = [{ name: 'Pension', amount: 100.01, treatment: 'Sacrifice', to: '2026-08-31' }, { name: 'Pension', amount: 110.02, treatment: 'Sacrifice', from: '2026-09-01' }];
+  const r = C.payCalc(pay({ fixed }), '2026-09-09').rows.find(x => x.payday === '2026-09-25');
+  assert.deepEqual([r.start, r.end], ['2026-08-23', '2026-09-19']);
+  assert.equal(r.sacr, 106.81);
+  assert.equal(C.r2(100.01 * 9 / 28 + 110.02 * 19 / 28), 106.8, 'not the fractions added up and rounded once');
+});
+
+test('the year to date off a payslip is where the next pay day\'s tax starts from', () => {
+  const on = ytd => C.payCalc(pay({ ytd }), '2026-09-09').allRows;
+  const own = on({}), row = (rows, d) => rows.find(r => r.payday === d);
+  assert.deepEqual([row(own, '2026-09-25').paye, row(own, '2026-09-25').ytdFrom], [438.4, null], 'this app\'s own running total');
+  // the August payslip says £20,000 taxable and £2,700 tax so far: week 28 is then £23,159.12 less £6,773.76, £16,385 at 20%
+  const rows = on({ '2026-08-28': { taxable: 20000, paye: 2700 } });
+  assert.deepEqual([row(rows, '2026-09-25').paye, row(rows, '2026-09-25').ytdFrom], [577, '2026-08-28']);
+  assert.equal(row(rows, '2026-08-28').paye, row(own, '2026-08-28').paye, 'the pay day it was typed against stays as worked');
+  assert.equal(row(rows, '2026-10-23').ytdFrom, '2026-08-28', 'and every pay day after it carries on from there');
+  assert.equal(row(rows, '2026-10-23').paye, row(own, '2026-10-23').paye, 'a later pay day in the same band costs what it always did');
+  assert.equal(row(rows, '2027-04-09').ytdFrom, null, 'until the tax year turns and the running total starts again');
+  // half a pair is not a year to date
+  assert.equal(row(on({ '2026-08-28': { taxable: 20000, paye: null } }), '2026-09-25').paye, 438.4);
+  assert.equal(row(on({ '2026-08-28': { taxable: '', paye: 2700 } }), '2026-09-25').paye, 438.4);
 });

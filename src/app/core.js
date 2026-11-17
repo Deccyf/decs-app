@@ -292,6 +292,20 @@ function normalize() {
   Object.keys(P.hpaHistory).forEach(k => { if (!/^\d{4}$/.test(k)) delete P.hpaHistory[k]; });
   if (!C.isDate(P.nextPayDay)) P.nextPayDay = (SEED.pay && SEED.pay.nextPayDay) || C.today();
   if (!C.num(P.weeksYear)) P.weeksYear = 52.1667;
+  /* The Sunday premium used to be a flat figure an hour. Where that figure is
+     exactly a whole percentage of the hourly rate, to the penny, it is kept as
+     the percentage, so a pay rise moves it and back-pays it the way the
+     payslip does. Anything else stays the flat figure it was. Once. */
+  if (P.sundayPct === undefined) {
+    const hr = C.baseHourly(P), flat = C.r2(C.num(P.sundayRate));
+    const pct = hr > 0 && flat > 0 ? Math.round(flat / hr * 100) : 0;
+    P.sundayPct = pct > 0 && C.r2(hr * pct / 100) === flat ? pct
+      : !(C.num(P.salary) > 0) && SEED.pay && C.num(SEED.pay.sundayPct) > 0 && flat === C.r2(C.num(SEED.pay.sundayRate)) ? C.num(SEED.pay.sundayPct)   // nothing typed yet: the seed's own
+      : null;
+  }
+  // the year so far, off a payslip, is a pair of figures against a pay day
+  obj(P, 'ytd');
+  Object.keys(P.ytd).forEach(k => { if (!C.isDate(k) || !isObj(P.ytd[k])) delete P.ytd[k]; });
   if (P.payslipLead === undefined || P.payslipLead === null || P.payslipLead === '') P.payslipLead = 4;
   if (!C.num(P.hoursWeek)) P.hoursWeek = 35;
   if (P.periodEndDays === undefined || P.periodEndDays === null) P.periodEndDays = 6;

@@ -305,7 +305,7 @@ document.addEventListener('change', e => {
     if (v === null) { render(); return; }                // clearing it leaves the figures it made
     const before = C.payBefore(S.pay, r.from, i);
     if (!(before.salary > 0)) { toast('Put your salary in under Your pay first'); render(); return; }
-    r.salary = C.r2(before.salary * (1 + v / 100));
+    r.salary = Math.round(before.salary * (1 + v / 100));     // a pay scale is whole pounds: 3.6% on £41,200 is paid as £42,683, not £42,683.20
     if (before.london > 0) r.london = C.r2(before.london * (1 + v / 100));
     commit('the pay rise');
     return;

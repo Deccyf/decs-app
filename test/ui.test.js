@@ -1404,13 +1404,13 @@ test('on pay day the money is there from midnight, not the next morning', skip, 
   assert.match(await eve.$eval('#sub', e => e.textContent), /1 day to pay day/);
 
   const day = await open(t, { on: '2026-09-25', data, tab: 'money' });
-  assert.equal(await free(day), '£2,945.41', 'pay day itself, and it has landed');
+  assert.equal(await free(day), '£2,945.35', 'pay day itself, and it has landed');
   assert.match(await day.$eval('#sub', e => e.textContent), /28 days to pay day/, 'counting to the next one');
   assert.match(await day.$eval('#view', e => e.textContent), /Pay day has been since you typed this/,
     'with the nudge to check the bank and retype it');
 
   const after = await open(t, { on: '2026-09-26', data, tab: 'money' });
-  assert.equal(await free(after), '£2,945.41', 'the day after adds nothing new');
+  assert.equal(await free(after), '£2,945.35', 'the day after adds nothing new');
 });
 
 test('on pay day the board marks it paid and moves NEXT on', skip, async t => {
@@ -1438,8 +1438,8 @@ test('typing the net off your payslip takes over from the projection', skip, asy
   const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' '))))
     .find(c => c.includes('Net pay'));
 
-  assert.match(await card(), /Net pay \(projected\).*£2,545\.41/);
-  assert.equal(await page.$eval('[data-set="pay.actual.2026-09-25"]', e => e.placeholder), '2545.41',
+  assert.match(await card(), /Net pay \(projected\).*£2,545\.35/);
+  assert.equal(await page.$eval('[data-set="pay.actual.2026-09-25"]', e => e.placeholder), '2545.35',
     'the projection is the placeholder, so you can see what it reckoned');
 
   await page.fill('[data-set="pay.actual.2026-09-25"]', '2563.09');
@@ -1448,8 +1448,8 @@ test('typing the net off your payslip takes over from the projection', skip, asy
   assert.equal(await stored(page).then(s => s.pay.actual['2026-09-25']), 2563.09);
   let c = await card();
   assert.match(c, /Net pay \(your payslip\).*£2,563\.09/);
-  assert.match(c, /Projected was.*£2,545\.41.*£17\.68 under the payslip/);
-  assert.match(c, /Basic pay£3,159\.10/, 'the breakdown is left as it was worked out');
+  assert.match(c, /Projected was.*£2,545\.35.*£17\.74 under the payslip/);
+  assert.match(c, /Basic pay£3,159\.12/, 'the breakdown is left as it was worked out');
   assert.match(c, /PAYE-£438\.40/, 'tax and NI still explain the projection');
   assert.match(await page.$eval('#view', e => e.textContent), /1 pay day came off a payslip/);
 
@@ -1465,7 +1465,7 @@ test('typing the net off your payslip takes over from the projection', skip, asy
   await page.dispatchEvent('[data-set="pay.actual.2026-09-25"]', 'change');
   await page.waitForTimeout(350);
   assert.equal(await stored(page).then(s => s.pay.actual['2026-09-25']), null);
-  assert.match(await card(), /Net pay \(projected\).*£2,545\.41/);
+  assert.match(await card(), /Net pay \(projected\).*£2,545\.35/);
 });
 
 test('a pay day off a payslip is marked as such on the board', skip, async t => {
@@ -1706,7 +1706,7 @@ test('a bill on pay day comes out of the pay, and this week runs past pay day', 
   await page.click('.tabs button[data-tab="money"]'); await page.waitForTimeout(250);
   const res = await page.$eval('#view .results', e => e.textContent.replace(/\s+/g, ' '));
   assert.match(res, /Rent on pay day, out of the pay\s*-£780\.00/);
-  assert.match(res, /Balance after pay\s*£1,865\.41/, '100 + 2,545.41 - 780');
+  assert.match(res, /Balance after pay\s*£1,865\.35/, '100 + 2,545.35 - 780');
 });
 
 test('a new rate applies from today, not back to the statement', skip, async t => {
@@ -1954,7 +1954,7 @@ test('a pay rise offers the London weighting at the same percentage, and back-pa
   await page.click('[data-act="riseLondon"][data-i="0"]'); await page.waitForTimeout(350);
   assert.equal((await stored(page)).pay.rises[0].london, 185.24);
   assert.match(await box(), /London weighting £178\.80 → £185\.24 a period \(\+3\.6%\)/);
-  assert.match(await box(), /basic £955\.52 \+ London weighting £39\.56 across 7 pay days/);
+  assert.match(await box(), /basic £955\.60 \+ London weighting £39\.56 across 7 pay days/);
 });
 
 test('London weighting in Your pay and under Every period is flagged as counted twice', skip, async t => {
@@ -1972,9 +1972,9 @@ test('a pay rise can be typed as a percentage, or as the salary, and each shows 
   await page.fill('[data-rise-pct="0"]', '3.6');
   await page.dispatchEvent('[data-rise-pct="0"]', 'change'); await page.waitForTimeout(350);
   let r = (await stored(page)).pay.rises[0];
-  assert.deepEqual([r.salary, r.london], [58379.64, 185.24], 'both worked out from the figures before it');
+  assert.deepEqual([r.salary, r.london], [58380, 185.24], 'both worked out from the figures before it, the salary to the whole pound a scale is in');
   assert.equal(await page.$eval('[data-rise-pct="0"]', e => e.value), '3.6', 'and the box keeps saying 3.6');
-  assert.match(await page.$eval('details[data-key="rises"]', e => e.textContent.replace(/\s+/g, ' ')), /basic £955\.52 \+ London weighting £39\.56/);
+  assert.match(await page.$eval('details[data-key="rises"]', e => e.textContent.replace(/\s+/g, ' ')), /basic £955\.84 \+ London weighting £39\.56/);
 
   // the salary typed straight in: the percentage follows it
   await page.fill('[data-set="pay.rises.0.salary"]', '58605.04');
@@ -2176,4 +2176,58 @@ test('a date typed on a keyboard is taken once the box is left, not at every dig
   assert.equal((await stored(page)).money.savings.goals[0].got, null);
   await page.click('[data-set="money.savings.goals.0.name"]'); await page.waitForTimeout(350);
   assert.equal((await stored(page)).money.savings.goals[0].got, '2026-04-04');
+});
+
+/* ------------------------------------- what six real payslips showed up -- */
+test('a flat Sunday premium that is a whole share of the hourly rate is kept as that share', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  // £50,000 is £27.38 an hour, and £2.74 is 10% of that to the penny
+  Object.assign(data.pay, { salary: 50000, sundayRate: 2.74, hours: { '2026-09-25': { ot: 0, sun: 10 } },     // the one pay day at the old rate after the rise's date
+    rises: [{ from: '2026-08-23', salary: 55000, london: null, arrearsOn: '2026-10-23', otBackpay: true }] });
+  const page = await open(t, { on: '2026-10-03', data, tab: 'pay' });
+  assert.equal((await stored(page)).pay.sundayPct, 10);
+  await page.click('details[data-key="yourpay"] summary'); await page.waitForTimeout(200);
+  assert.equal(await page.$eval('[data-set="pay.sundayPct"]', e => e.value), '10');
+  assert.equal(await page.$('[data-set="pay.sundayRate"]'), null, 'the flat box gives way to what the share comes to');
+  assert.match(await page.$eval('details[data-key="yourpay"]', e => [...e.querySelectorAll('input[disabled]')].map(i => i.value).join('|')), /£3\.01 an hour/, '10% of the £30.12 the rise makes it');
+  await page.click('details[data-key="rises"] summary'); await page.waitForTimeout(200);
+  const rises = await page.$eval('details[data-key="rises"]', e => e.textContent.replace(/\s+/g, ' '));
+  assert.match(rises, /Sunday premium £2\.74 → £3\.01 an hour, as 10% of the new hourly rate/);
+  assert.match(rises, /Sunday premium £2\.70/, 'ten Sunday hours at the 27p difference, in the backpay');
+  // clearing the share goes back to a flat figure an hour
+  await page.fill('[data-set="pay.sundayPct"]', ''); await page.dispatchEvent('[data-set="pay.sundayPct"]', 'change'); await page.waitForTimeout(350);
+  assert.equal((await stored(page)).pay.sundayPct, null);
+  assert.equal(await page.$eval('[data-set="pay.sundayRate"]', e => e.value), '2.74');
+  assert.doesNotMatch(await page.$eval('details[data-key="rises"]', e => e.textContent), /Sunday premium £/);
+});
+
+test('a flat Sunday premium that is not a whole share stays the flat figure it was', skip, async t => {
+  const page = await open(t, { tab: 'pay' });                  // £3.70 on £22.57 an hour is 16.4%
+  await page.click('details[data-key="yourpay"] summary'); await page.waitForTimeout(200);
+  assert.equal(await page.$eval('[data-set="pay.sundayPct"]', e => e.value), '');
+  assert.equal(await page.$eval('[data-set="pay.sundayRate"]', e => e.value), '3.7');
+});
+
+test('the payslip\'s year to date carries the tax on from the real figures', skip, async t => {
+  const data = JSON.parse(JSON.stringify(SAMPLE));
+  data.pay.ytd = { '2026-08-28': 'rubbish', 'not a day': { taxable: 1, paye: 1 } };
+  const page = await open(t, { on: '2026-09-22', data, tab: 'pay' });
+  const card = async () => (await page.$$eval('#view .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' ')))).find(c => c.includes('Net pay'));
+  assert.match(await card(), /PAYE-£438\.40 National|PAYE-£438\.40National/, 'this app\'s own running total, to begin with');
+  // the payslip for 25 Sep is in hand: its year to date goes in on that pay day
+  await page.click('details[data-key="ytd"] summary'); await page.waitForTimeout(200);
+  for (const [k, v] of [['taxable', '23000'], ['paye', '3300']]) {
+    await page.fill(`[data-set="pay.ytd.2026-09-25.${k}"]`, v); await page.dispatchEvent(`[data-set="pay.ytd.2026-09-25.${k}"]`, 'change'); await page.waitForTimeout(350);
+  }
+  assert.deepEqual((await stored(page)).pay.ytd, { '2026-09-25': { taxable: 23000, paye: 3300 } }, 'and what was not a year to date is gone');
+  assert.match(await card(), /PAYE-£438\.40/, 'the pay day it was typed against is left as worked');
+  // the one after starts from it: £26,159.12 by week 32, less £7,741.44 free, is £18,417 at 20%, less the £3,300 paid
+  await page.click('[data-act="pick"][data-payday="2026-10-23"]'); await page.waitForTimeout(300);
+  assert.match(await card(), /PAYE-£383\.40from the payslip's year to 25.Sep/);
+  // take one of the pair away and it is this app's own total again
+  await page.click('[data-act="pick"][data-payday="2026-09-25"]'); await page.waitForTimeout(300);
+  await page.fill('[data-set="pay.ytd.2026-09-25.paye"]', ''); await page.dispatchEvent('[data-set="pay.ytd.2026-09-25.paye"]', 'change'); await page.waitForTimeout(350);
+  await page.click('[data-act="pick"][data-payday="2026-10-23"]'); await page.waitForTimeout(300);
+  assert.match(await card(), /PAYE-£438\.20National/, 'week 32 on the running total: £25,272.96 less the free pay is £17,531, less the £3,068 paid');
+  assert.doesNotMatch(await card(), /PAYE-£[\d,.]+from the payslip's year/);
 });
