@@ -81,12 +81,15 @@ const stored = page => page.evaluate(k => JSON.parse(localStorage.getItem(k)), K
 test('a variant is the same page with another seed and another name, and nothing else', () => {
   const main = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const same = (html, title, initial) => html
+    .replace(/<!-- Built [^\n]*?-->/, '<!-- built -->')
     .replace(/<script id="seed" type="application\/json">[^]*?<\/script>/, '<seed>')
     .split(`>${title}<`).join('>TITLE<')
     .replace(`%3E${initial}%3C/text`, '%3EI%3C/text')
     .replace(`aria-hidden="true">${initial}</div>`, 'aria-hidden="true">I</div>');
   assert.equal(same(built.html, TITLE, 'V'), same(main, "Dec's Tracker", 'D'), 'the styles and the code are the very same');
   assert.match(built.html, /<title>Vince's Pay<\/title>/);
+  assert.match(built.html, /<!-- Built by Deccyf\/decs-app from its src\/ and variants\/vince\.json \(node build\.js vince\)\. Edit those, not this file/,
+    'it says where it comes from, so nobody edits it by hand in his repo');
   assert.doesNotMatch(built.html, />Dec's Tracker</, 'the main app is not named on the page, the heading or the lock screen');
   const seed = JSON.parse(built.html.match(/<script id="seed" type="application\/json">([^]*?)<\/script>/)[1]);
   assert.deepEqual(seed, CONF.seed, 'the seed is the one in variants/vince.json');

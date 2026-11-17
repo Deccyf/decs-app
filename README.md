@@ -57,7 +57,9 @@ carry a few switches of its own, and the app reads them at start-up:
 `variants/vince.json` is one of these: **Vince's Pay**, published from
 `Deccyf/vinces-app`. `npm run build:vince` writes `dist/vince/index.html` and
 `dist/vince/sw.js` (not committed here); those two files replace the ones in
-his repo, whose manifest and icons stay as they are. The service worker is this
+his repo, whose manifest and icons stay as they are. Both say at the top that
+they are built here, so change them here and rebuild rather than edit them
+there. The service worker is this
 app's own with the cache renamed, and its version is the `cache` in the
 variant's file — bump it there whenever his `index.html` changes.
 

@@ -49,7 +49,12 @@ function variant(name) {
   if (!v.seed || !v.seed.storageKey || !v.seed.title) throw new Error(`variants/${name}.json needs a seed with a storageKey and a title of its own`);
   const dir = path.join(__dirname, 'dist', name);
   fs.mkdirSync(dir, { recursive: true });
-  const html = page(JSON.stringify(v.seed)), sw = worker(v.cache, v.seed.title);
+  // the page says where it comes from, so nobody edits it by hand in that app's own repo
+  let stamped = 0;
+  const html = page(JSON.stringify(v.seed)).replace(/<!-- Built from src\/ by build\.js\.[^\n]*?-->/, () => { stamped++;
+    return `<!-- Built by Deccyf/decs-app from its src/ and variants/${name}.json (node build.js ${name}). Edit those, not this file: every build overwrites it. -->`; });
+  if (!stamped) throw new Error('page.html has changed shape: the variant build could not say where it comes from');
+  const sw = worker(v.cache, v.seed.title);
   fs.writeFileSync(path.join(dir, 'index.html'), html);
   fs.writeFileSync(path.join(dir, 'sw.js'), sw);
   return { dir, html, sw };
